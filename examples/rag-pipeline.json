@@ -1,0 +1,54 @@
+{
+  "nodes": [
+    {
+      "id": "start1",
+      "data": {
+        "type": "start",
+        "title": "Start",
+        "variables": [
+          { "variable": "query", "type": "text-input", "required": true }
+        ]
+      }
+    },
+    {
+      "id": "kr1",
+      "data": {
+        "type": "knowledge-retrieval",
+        "title": "Knowledge Retrieval",
+        "query_variable_selector": ["start1", "query"],
+        "dataset_ids": ["YOUR_DATASET_ID"]
+      }
+    },
+    {
+      "id": "llm1",
+      "data": {
+        "type": "llm",
+        "title": "LLM",
+        "model": {
+          "provider": "openai",
+          "name": "gpt-4o-mini",
+          "mode": "chat",
+          "completion_params": {}
+        },
+        "prompt_template": [
+          { "role": "user", "text": "Based on the following context, answer the question.\n\nContext: {{#kr1.result#}}\n\nQuestion: {{#start1.query#}}" }
+        ]
+      }
+    },
+    {
+      "id": "end1",
+      "data": {
+        "type": "end",
+        "title": "End",
+        "outputs": [
+          { "variable": "answer", "value_selector": ["llm1", "text"] }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "start1", "target": "kr1", "sourceHandle": "source", "targetHandle": "target" },
+    { "id": "e2", "source": "kr1", "target": "llm1", "sourceHandle": "source", "targetHandle": "target" },
+    { "id": "e3", "source": "llm1", "target": "end1", "sourceHandle": "source", "targetHandle": "target" }
+  ]
+}

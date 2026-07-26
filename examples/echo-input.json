@@ -1,0 +1,27 @@
+{
+  "nodes": [
+    {
+      "id": "start1",
+      "data": {
+        "type": "start",
+        "title": "Start",
+        "variables": [
+          { "variable": "query", "type": "text-input", "required": true }
+        ]
+      }
+    },
+    {
+      "id": "end1",
+      "data": {
+        "type": "end",
+        "title": "End",
+        "outputs": [
+          { "variable": "result", "value_selector": ["start1", "query"] }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "start1", "target": "end1", "sourceHandle": "source", "targetHandle": "target" }
+  ]
+}
