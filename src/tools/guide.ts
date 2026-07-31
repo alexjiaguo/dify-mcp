@@ -50,7 +50,10 @@ Minimal required fields per type (validator enforces these):
 - code: code_language, code, outputs   http-request: method, url
 - knowledge-retrieval: query_variable_selector, dataset_ids
 - if-else: conditions, logical_operator   variable-aggregator: variables
-Unknown/plugin types are warnings, not errors — but still validate structure.`,
+- tool: provider_id, provider_type, tool_name
+- parameter-extractor: query, model, parameters   assigner: items
+- iteration: iterator_selector, start_node_id   loop: start_node_id
+Unknown/plugin types are warnings, not errors - but still validate structure.`,
 
   errors: `# Error codes (stable; check "retryable" before retrying)
 USAGE_ERROR(2) bad args — fix the call.

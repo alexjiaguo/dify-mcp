@@ -26,7 +26,7 @@ create workflows, wire up nodes, test them, iterate, and publish — without a b
 
 **dify-mcp** is the bridge. It exposes the **entire Dify console API** as a unified
 tool registry with **two surfaces**: a CLI any shell-capable agent can drive, and an
-MCP server (stdio) any MCP-compatible host can attach. Same 138 tools, same JSON
+MCP server (stdio or Streamable HTTP) any MCP-compatible host can attach. Same 138 tools, same JSON
 contract, same safety guarantees.
 
 ```
@@ -98,7 +98,7 @@ Every tool category has been tested against **cloud.dify.ai** with real credenti
 - ✅ Full authoring loop: create app → sync draft → run draft → publish → list versions
 - ✅ All 16 namespaces exercised: apps, workflows, providers, plugins, triggers,
   snippets, RAG, agents, stats, comments, annotations, audio, files, runs, workspace
-- ✅ MCP transport: `tools/call` over stdio with live cookie auth
+- ✅ MCP transport: `tools/call` over stdio and Streamable HTTP with live cookie auth
 - ✅ 42 unit tests · typecheck clean · MCP smoke (138 tools)
 
 ## Quickstart
@@ -227,6 +227,22 @@ Aider doesn't support MCP, but it can run shell commands. Just use the CLI direc
 ```
 </details>
 
+<details>
+<summary><b>Remote host? Streamable HTTP instead of stdio</b></summary>
+
+For remote or containerized hosts that can't spawn a local process, run the MCP
+server over the stateless Streamable HTTP transport:
+
+```bash
+difywf mcp serve --http --port 8080
+# or via env: DIFYWF_MCP_TRANSPORT=http DIFYWF_MCP_PORT=8080 difywf mcp serve
+```
+
+Point any Streamable-HTTP-capable client at `http://<host>:8080/mcp`. Each POST is
+a self-contained JSON-RPC message (initialize / tools/list / tools/call); no
+session is required. GET and DELETE are rejected with 405.
+</details>
+
 > No `difywf` on PATH? Use the absolute path: `node /path/to/dify-mcp/bin/difywf.js mcp serve`.
 
 ## Tools
@@ -275,6 +291,7 @@ before retrying.
 npm run typecheck   # tsc --noEmit
 npm test            # 42 unit tests
 npm run smoke:mcp   # MCP stdio smoke (138 tools, JSON-RPC handshake)
+npm run smoke:mcp:http   # MCP Streamable HTTP smoke (stateless POST /mcp)
 ```
 
 No build step. Source runs directly via Node's type stripping.

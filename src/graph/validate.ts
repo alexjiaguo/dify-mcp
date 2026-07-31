@@ -43,6 +43,11 @@ const REQUIRED: Record<string, string[]> = {
   "question-classifier": ["query_variable_selector", "classes"],
   "if-else": ["conditions", "logical_operator"],
   "variable-aggregator": ["variables"],
+  tool: ["provider_id", "provider_type", "tool_name"],
+  "parameter-extractor": ["query", "model", "parameters"],
+  assigner: ["items"],
+  iteration: ["iterator_selector", "start_node_id"],
+  loop: ["start_node_id"],
 };
 
 const KNOWN_TYPES = new Set([
