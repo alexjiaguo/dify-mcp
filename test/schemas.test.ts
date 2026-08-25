@@ -80,6 +80,39 @@ test("loop: complete -> no errors", () => {
   assert.deepEqual(codes(validateGraph(wrap({ type: "loop", start_node_id: "loop_start" }))), []);
 });
 
+test("iteration sub-graph: container + iteration-start + inner node -> no false errors", () => {
+  // Real Dify iteration structure: the container's output_selector names an
+  // inner node, the inner node reads the container's scoped `item`, and the
+  // inner/start nodes are reachable only via parentId containment (not edges
+  // from start). None of these should raise UNREACHABLE_NODE, FORWARD_VAR_REF,
+  // or UNKNOWN_NODE_TYPE.
+  const graph: Graph = {
+    nodes: [
+      { id: "start", data: { type: "start", variables: [{ variable: "query", type: "text-input", required: true }] } },
+      { id: "src", data: { type: "code", code_language: "python3", code: "x", outputs: { arr: { type: "array[object]" } } } },
+      { id: "iter", data: {
+        type: "iteration",
+        iterator_selector: ["src", "arr"],
+        output_selector: ["inner", "text"],
+        start_node_id: "iterstart",
+      } },
+      { id: "iterstart", parentId: "iter", data: { type: "iteration-start", isInIteration: true } },
+      { id: "inner", parentId: "iter", data: {
+        type: "llm", isInIteration: true, iteration_id: "iter",
+        model: {}, prompt_template: [{ role: "user", text: "{{#iter.item#}}" }],
+      } },
+      { id: "end", data: { type: "end", outputs: [] } },
+    ],
+    edges: [
+      { id: "e1", source: "start", target: "src" },
+      { id: "e2", source: "src", target: "iter" },
+      { id: "e3", source: "iter", target: "end" },
+      { id: "e4", source: "iterstart", target: "inner" },
+    ],
+  };
+  assert.deepEqual(codes(validateGraph(graph)), []);
+});
+
 test("loop: missing start_node_id -> MISSING_REQUIRED_FIELD", () => {
   assert.ok(missing(validateGraph(wrap({ type: "loop" }))).some((m) => m.includes("start_node_id")));
 });
