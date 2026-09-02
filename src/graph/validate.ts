@@ -53,7 +53,9 @@ const REQUIRED: Record<string, string[]> = {
 const KNOWN_TYPES = new Set([
   ...Object.keys(REQUIRED),
   "iteration",
+  "iteration-start",
   "loop",
+  "loop-start",
   "tool",
   "parameter-extractor",
   "assigner",
@@ -147,6 +149,22 @@ export function validateGraph(
     reachable.add(id);
     for (const next of adj.get(id) ?? []) queue.push(next);
   }
+  // Iteration/loop sub-graph nodes (parentId set, plus the container's
+  // <id>start node) live inside their container and are not wired to `start`
+  // by normal edges — they run when the reachable container executes. Mark a
+  // node reachable once its parent container is reachable; iterate to a
+  // fixpoint so nested containers propagate.
+  const parentOf = (n: GraphNode): string | undefined =>
+    (n.parentId as string | undefined) ?? (n.data?.iteration_id as string | undefined) ?? (n.data?.loop_id as string | undefined);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const n of nodes) {
+      if (reachable.has(n.id)) continue;
+      const p = parentOf(n);
+      if (p && reachable.has(p)) { reachable.add(n.id); grew = true; }
+    }
+  }
   for (const n of nodes) {
     const t = nodeType(n);
     if (t && DECORATIVE_TYPES.has(t)) continue; // canvas notes are intentionally unconnected
@@ -184,9 +202,25 @@ export function validateGraph(
         issues.push({ level: "error", code: "BAD_VAR_REF", message: `node '${n.id}' references itself`, nodeId: n.id });
         continue;
       }
-      // ponytail: ignores loop/iteration scoped-variable exceptions; a scoped
-      // reference inside a loop body may false-positive here. Refine when hit.
-      if (!ancestors.get(n.id)?.has(ref)) {
+      // Iteration/loop scoped-variable exceptions (container containment is not
+      // an edge-ancestry relation, so these are legitimate despite failing the
+      // upstream check):
+      //   a) container -> its own inner node: an iteration's output_selector
+      //      names an inner node whose result is collected each pass.
+      //   b) inner node -> its container: inner nodes read the container's
+      //      scoped vars (item/index) via {{#<container>.item#}}.
+      //   c) sibling -> sibling inside the same container: sub-graph ancestry
+      //      is tracked separately; a same-parent ref is in-scope.
+      const refNode = byId.get(ref);
+      const parentIdOf = (x?: GraphNode): string | undefined =>
+        x ? ((x.parentId as string | undefined) ?? (x.data?.iteration_id as string | undefined) ?? (x.data?.loop_id as string | undefined)) : undefined;
+      const nParent = parentIdOf(n);
+      const refParent = parentIdOf(refNode);
+      const scoped =
+        refParent === n.id ||            // (a) n is the container of ref
+        nParent === ref ||               // (b) ref is the container of n
+        (nParent !== undefined && nParent === refParent); // (c) same container
+      if (!scoped && !ancestors.get(n.id)?.has(ref)) {
         issues.push({ level: "error", code: "FORWARD_VAR_REF", message: `node '${n.id}' references '${ref}', which is not upstream of it`, nodeId: n.id });
       }
     }
