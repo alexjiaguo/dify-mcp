@@ -147,6 +147,40 @@ export const tools: Tool[] = [
       (needClient(ctx, "console") as ConsoleClient).updateApp(req(args, "app_id"), pick(args, ["name", "description", "icon", "icon_type", "icon_background"])),
   },
   {
+    name: "app.list_tags",
+    summary: "List the exact tags currently bound to one app.",
+    needs: "console",
+    schema: { type: "object", properties: { app_id: S("app uuid") }, required: ["app_id"] },
+    run: async (args, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).getAppTags(req(args, "app_id")),
+  },
+  {
+    name: "app.ensure_tag",
+    summary: "Create an app tag if needed, bind it to an app, and verify exact-name readback. Requires confirm=true.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: { app_id: S("app uuid"), tag: S("exact app tag name"), confirm: CONFIRM },
+      required: ["app_id", "tag", "confirm"],
+    },
+    run: async (args, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).ensureAppTag(req(args, "app_id"), req(args, "tag")),
+  },
+  {
+    name: "app.remove_tag",
+    summary: "Unbind one exact-name tag from an app and verify readback. Requires confirm=true.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: { app_id: S("app uuid"), tag: S("exact app tag name"), confirm: CONFIRM },
+      required: ["app_id", "tag", "confirm"],
+    },
+    run: async (args, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).removeAppTag(req(args, "app_id"), req(args, "tag")),
+  },
+  {
     name: "app.delete",
     summary: "Delete an app. Destructive; requires confirm=true.",
     needs: "console",
@@ -276,6 +310,48 @@ export const tools: Tool[] = [
     schema: { type: "object", properties: { app_id: S("app uuid"), marked_name: S("version name, max 20 chars"), marked_comment: S("max 100 chars"), confirm: CONFIRM }, required: ["app_id", "confirm"] },
     run: async (args, ctx) =>
       (needClient(ctx, "console") as ConsoleClient).publish(req(args, "app_id"), pick(args, ["marked_name", "marked_comment"])),
+  },
+  {
+    name: "workflow.tool_get",
+    summary: "Get a workflow-as-tool provider by workflow app id or workflow tool id, including its synced status.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: { app_id: S("workflow app uuid"), workflow_tool_id: S("workflow tool provider uuid") },
+      anyOf: [{ required: ["app_id"] }, { required: ["workflow_tool_id"] }],
+    },
+    run: async (args, ctx) => {
+      const appId = str(args.app_id);
+      const toolId = str(args.workflow_tool_id);
+      if (!appId && !toolId) throw new ToolError("USAGE_ERROR", "pass app_id or workflow_tool_id");
+      return (needClient(ctx, "console") as ConsoleClient).getWorkflowTool({ appId, toolId });
+    },
+  },
+  {
+    name: "workflow.tool_refresh_provider",
+    summary: "Create or update a workflow-as-tool provider so it targets the app's current published version; verifies synced=true.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: { app_id: S("published workflow app uuid"), confirm: CONFIRM },
+      required: ["app_id", "confirm"],
+    },
+    run: async (args, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).refreshWorkflowToolProvider(req(args, "app_id")),
+  },
+  {
+    name: "workflow.tool_delete",
+    summary: "Delete a workflow-as-tool provider. Destructive; requires confirm=true.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: { workflow_tool_id: S("workflow tool provider uuid"), confirm: CONFIRM },
+      required: ["workflow_tool_id", "confirm"],
+    },
+    run: async (args, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).deleteWorkflowTool(req(args, "workflow_tool_id")),
   },
   {
     name: "provider.list",
@@ -419,26 +495,39 @@ export const tools: Tool[] = [
   },
   {
     name: "app.import",
-    summary: "Import an app from DSL. Handles the 2-step confirm flow. Installs plugins; requires confirm=true.",
-    needs: "openapi",
+    summary: "Import an app from DSL through console cookies or OpenAPI. Handles the 2-step confirm flow; requires confirm=true.",
     confirm: true,
-    schema: { type: "object", properties: { workspace_id: S("target workspace"), yaml: S("DSL YAML content"), yaml_url: S("...or YAML URL"), name: S("override name"), description: S(""), confirm: CONFIRM }, required: ["workspace_id", "confirm"] },
+    schema: { type: "object", properties: { workspace_id: S("target workspace; required only for OpenAPI fallback"), yaml: S("DSL YAML content"), yaml_url: S("...or YAML URL"), name: S("override name"), description: S(""), confirm: CONFIRM }, required: ["confirm"] },
     run: async (a, ctx) => {
-      const c = needClient(ctx, "openapi") as OpenapiClient;
-      const wid = req(a, "workspace_id");
       const body: Record<string, unknown> = {};
       if (str(a.yaml)) { body.mode = "yaml-content"; body.yaml_content = str(a.yaml); }
       else if (str(a.yaml_url)) { body.mode = "yaml-url"; body.yaml_url = str(a.yaml_url); }
       else throw new ToolError("USAGE_ERROR", "pass yaml (content) or yaml_url");
       if (str(a.name)) body.name = str(a.name);
       if (str(a.description)) body.description = str(a.description);
-      const imp = await c.importDsl(wid, body);
+      const consoleClient = ctx.console;
+      const openapiClient = ctx.openapi;
+      if (!consoleClient && !openapiClient) {
+        throw new ToolError("AUTH_REQUIRED", "app.import needs console cookies or an OpenAPI token");
+      }
+      const wid = str(a.workspace_id);
+      if (!consoleClient && !wid) {
+        throw new ToolError("USAGE_ERROR", "workspace_id is required for OpenAPI app.import");
+      }
+      const imp = consoleClient
+        ? await consoleClient.importDsl(body)
+        : await openapiClient!.importDsl(wid!, body);
       if (!imp.ok) return imp;
       const data = (imp.data ?? {}) as Record<string, unknown>;
       const importId = str(data.import_id) ?? str(data.id);
-      const pending = data.status === "pending" || data.result === "pending" || (importId && data.result === undefined);
+      const pending = data.status === "pending"
+        || data.status === "completed_but_needs_plugin_install"
+        || data.result === "pending"
+        || (importId && data.result === undefined && !str(data.app_id));
       if (importId && pending) {
-        const conf = await c.confirmImport(wid, importId);
+        const conf = consoleClient
+          ? await consoleClient.confirmImport(importId)
+          : await openapiClient!.confirmImport(wid!, importId);
         return conf.ok ? ok({ imported: true, confirmed: true, ...(conf.data as Record<string, unknown> ?? {}) }) : conf;
       }
       return ok({ imported: true, confirmed: false, ...data });

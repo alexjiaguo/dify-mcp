@@ -1,6 +1,7 @@
 // MCP Streamable HTTP smoke test: start the server in --http mode, then run
 // initialize -> tools/list -> tools/call against POST /mcp (stateless).
 import { spawn } from "node:child_process";
+import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -59,7 +60,7 @@ try {
   const listRes = await readResult(list);
   const names = (listRes?.result?.tools ?? []).map((t) => t.name);
   if (names.length < 15) fail(`expected >=15 tools, got ${names.length}`);
-  for (const req of ["agent_guide", "workflow_validate", "workflow_sync_draft", "app_create"]) {
+  for (const req of ["agent_guide", "workflow_validate", "workflow_sync_draft", "workflow_tool_refresh_provider", "app_create"]) {
     if (!names.includes(req)) fail(`missing tool ${req}`);
   }
   console.log(`tools/list OK (${names.length} tools)`);

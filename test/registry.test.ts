@@ -39,6 +39,27 @@ test("app.import skips confirm when import completes immediately", async () => {
   if (r.ok) assert.equal((r.data as Record<string, unknown>).confirmed, false);
 });
 
+test("app.import prefers console cookies and does not require workspace_id", async () => {
+  const calls: string[] = [];
+  const fake = {
+    importDsl: async (_body: Record<string, unknown>): Promise<Result<unknown>> => {
+      calls.push("import");
+      return { ok: true, data: { id: "i1", status: "completed_but_needs_plugin_install" } };
+    },
+    confirmImport: async (id: string): Promise<Result<unknown>> => {
+      calls.push(`confirm:${id}`);
+      return { ok: true, data: { status: "completed", app_id: "new-app" } };
+    },
+  };
+  const r = await find("app.import").run(
+    { yaml: "kind: app", confirm: true },
+    fakeCtx({ openapi: null, console: fake as never }),
+  );
+  assert.ok(r.ok);
+  if (r.ok) assert.equal((r.data as Record<string, unknown>).confirmed, true);
+  assert.deepEqual(calls, ["import", "confirm:i1"]);
+});
+
 test("workflow.sync_draft dry_run returns a structural diff", async () => {
   const current = {
     graph: {

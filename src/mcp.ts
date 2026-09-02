@@ -70,13 +70,16 @@ const transportMode = (
 ).toLowerCase();
 
 if (transportMode === "http") {
-  startHttpServer(Number(argValue("--port") ?? process.env.DIFYWF_MCP_PORT ?? 3000));
+  startHttpServer(
+    Number(argValue("--port") ?? process.env.DIFYWF_MCP_PORT ?? 3000),
+    argValue("--host") ?? process.env.DIFYWF_MCP_HOST ?? "0.0.0.0",
+  );
 } else {
   await createMcpServer().connect(new StdioServerTransport());
 }
 
 // --- Streamable HTTP transport (stateless, one server per request) ---
-function startHttpServer(port: number): void {
+function startHttpServer(port: number, host: string): void {
   const httpServer = createServer((req, res) => {
     handleHttpRequest(req, res).catch((e) => {
       if (!res.headersSent) {
@@ -85,8 +88,8 @@ function startHttpServer(port: number): void {
       }
     });
   });
-  httpServer.listen(port, () => {
-    process.stderr.write(`difywf MCP (Streamable HTTP) listening on http://0.0.0.0:${port}/mcp\n`);
+  httpServer.listen(port, host, () => {
+    process.stderr.write(`difywf MCP (Streamable HTTP) listening on http://${host}:${port}/mcp\n`);
   });
   const shutdown = (): void => { httpServer.close(); process.exit(0); };
   process.on("SIGINT", shutdown);

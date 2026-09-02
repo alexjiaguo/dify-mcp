@@ -15,7 +15,7 @@ Thanks for your interest in dify-mcp! This is a community project - contribution
 git clone https://github.com/alexjiaguo/dify-mcp.git
 cd dify-mcp
 npm install
-npm test              # 42 unit tests
+npm test              # 49 unit tests
 npm run typecheck     # tsc --noEmit
 npm run smoke:mcp     # MCP stdio smoke
 ```

@@ -144,6 +144,21 @@ test("consoleLogin captures cookies from Set-Cookie", async () => {
   );
 });
 
+test("consoleLogin optionally base64-encodes the password payload", async () => {
+  let body = "";
+  await withFetch(
+    async (_url, init) => {
+      body = String((init as { body?: string }).body ?? "");
+      return mockResponse(200, { result: "success" }, ["console_token=abc; Path=/"]);
+    },
+    async () => {
+      const r = await consoleLogin("http://x", "a@b.com", "secret", "base64");
+      assert.ok(r.ok);
+    },
+  );
+  assert.equal(JSON.parse(body).password, Buffer.from("secret", "utf8").toString("base64"));
+});
+
 test("refreshConsoleCookies merges new cookies onto existing (keeps refresh_token)", async () => {
   await withFetch(
     async () => mockResponse(200, { result: "success" }, ["console_token=newt; Path=/"]),

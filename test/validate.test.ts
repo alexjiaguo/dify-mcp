@@ -58,6 +58,41 @@ test("missing required field per node type", () => {
   assert.ok(got.includes("MISSING_REQUIRED_FIELD"));
 });
 
+test("modern multi-case if-else does not require legacy node-level conditions", () => {
+  const graph: Graph = {
+    nodes: [
+      { id: "s", data: { type: "start", variables: [{ variable: "route" }] } },
+      {
+        id: "if1",
+        data: {
+          type: "if-else",
+          cases: [
+            {
+              id: "case-a",
+              case_id: "case-a",
+              logical_operator: "and",
+              conditions: [
+                {
+                  id: "condition-a",
+                  variable_selector: ["s", "route"],
+                  comparison_operator: "is",
+                  value: "a",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      { id: "e", data: { type: "end", outputs: [] } },
+    ],
+    edges: [
+      { source: "s", target: "if1" },
+      { source: "if1", sourceHandle: "case-a", target: "e" },
+    ],
+  };
+  assert.deepEqual(codes(validateGraph(graph)), []);
+});
+
 test("sys and env references are not treated as node refs", () => {
   const graph: Graph = {
     nodes: [
@@ -97,4 +132,3 @@ test("all example templates in examples/ produce no error-level issues", () => {
     assert.deepEqual(codes(issues), [], `Expected no error issues in ${file}, got: ${JSON.stringify(issues)}`);
   }
 });
-

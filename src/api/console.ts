@@ -57,6 +57,12 @@ export class ConsoleClient {
     const r = await this.call<{ data: string }>(`apps/${appId}/export`);
     return r.ok ? ok(r.data.data) : r;
   }
+  importDsl(payload: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call("apps/imports", { body: payload });
+  }
+  confirmImport(importId: string): Promise<Result<unknown>> {
+    return this.call(`apps/imports/${importId}/confirm`, { body: {} });
+  }
   createApp(body: Record<string, unknown>): Promise<Result<unknown>> {
     return this.call("apps", { body });
   }
@@ -65,6 +71,118 @@ export class ConsoleClient {
   }
   deleteApp(appId: string): Promise<Result<unknown>> {
     return this.call(`apps/${appId}`, { method: "DELETE" });
+  }
+  async getAppTags(appId: string): Promise<Result<{ app_id: string; tags: Array<{ id?: string; name: string }> }>> {
+    const app = await this.getApp(appId);
+    if (!app.ok) return app;
+    const raw = (app.data as Record<string, unknown>).tags;
+    const tags = Array.isArray(raw)
+      ? raw.flatMap((item) => {
+          if (!item || typeof item !== "object") return [];
+          const value = item as Record<string, unknown>;
+          const name = nonEmptyString(value.name);
+          if (!name) return [];
+          const id = nonEmptyString(value.id);
+          return [{ ...(id ? { id } : {}), name }];
+        })
+      : [];
+    return ok({ app_id: appId, tags });
+  }
+  listAppTags(): Promise<Result<unknown>> {
+    return this.call("tags", { query: { type: "app" } });
+  }
+  createAppTag(name: string): Promise<Result<unknown>> {
+    return this.call("tags", { body: { name, type: "app" } });
+  }
+  bindAppTag(appId: string, tagId: string): Promise<Result<unknown>> {
+    return this.call("tag-bindings", {
+      body: { tag_ids: [tagId], target_id: appId, type: "app" },
+    });
+  }
+  removeAppTagBinding(appId: string, tagId: string): Promise<Result<unknown>> {
+    return this.call("tag-bindings/remove", {
+      body: { tag_ids: [tagId], target_id: appId, type: "app" },
+    });
+  }
+  async ensureAppTag(appId: string, tagName: string): Promise<Result<unknown>> {
+    const before = await this.getAppTags(appId);
+    if (!before.ok) return before;
+    const existing = before.data.tags.find((tag) => tag.name === tagName);
+    if (existing) {
+      return ok({ action: "unchanged", app_id: appId, tag: existing, after: before.data.tags });
+    }
+
+    const listed = await this.listAppTags();
+    if (!listed.ok) return listed;
+    const rows = Array.isArray(listed.data) ? listed.data : [];
+    let tagId: string | undefined;
+    for (const item of rows) {
+      if (!item || typeof item !== "object") continue;
+      const value = item as Record<string, unknown>;
+      if (value.name === tagName) tagId = nonEmptyString(value.id);
+    }
+    let created = false;
+    if (!tagId) {
+      const added = await this.createAppTag(tagName);
+      if (!added.ok) return added;
+      tagId = nonEmptyString((added.data as Record<string, unknown> | null)?.id);
+      if (!tagId) return err("SERVER_ERROR", "created app tag response is missing id");
+      created = true;
+    }
+
+    const bound = await this.bindAppTag(appId, tagId);
+    if (!bound.ok) return bound;
+    const after = await this.getAppTags(appId);
+    if (!after.ok) return after;
+    const readback = after.data.tags.find((tag) => tag.name === tagName);
+    if (!readback) {
+      return err("DSL_VERSION_MISMATCH", `app tag ${tagName} is missing after bind readback`, {
+        details: { app_id: appId, tag_id: tagId, after: after.data.tags },
+      });
+    }
+    return ok({
+      action: created ? "created_and_bound" : "bound",
+      app_id: appId,
+      tag: readback,
+      after: after.data.tags,
+    });
+  }
+  async removeAppTag(appId: string, tagName: string): Promise<Result<unknown>> {
+    const before = await this.getAppTags(appId);
+    if (!before.ok) return before;
+    const existing = before.data.tags.find((tag) => tag.name === tagName);
+    if (!existing) {
+      return ok({ action: "unchanged", app_id: appId, tag: tagName, after: before.data.tags });
+    }
+
+    let tagId = existing.id;
+    if (!tagId) {
+      const listed = await this.listAppTags();
+      if (!listed.ok) return listed;
+      const rows = Array.isArray(listed.data) ? listed.data : [];
+      for (const item of rows) {
+        if (!item || typeof item !== "object") continue;
+        const value = item as Record<string, unknown>;
+        if (value.name === tagName) tagId = nonEmptyString(value.id);
+      }
+    }
+    if (!tagId) return err("SERVER_ERROR", `app tag ${tagName} has no resolvable id`);
+
+    const removed = await this.removeAppTagBinding(appId, tagId);
+    if (!removed.ok) return removed;
+    const after = await this.getAppTags(appId);
+    if (!after.ok) return after;
+    if (after.data.tags.some((tag) => tag.name === tagName)) {
+      return err("DSL_VERSION_MISMATCH", `app tag ${tagName} remains after unbind readback`, {
+        details: { app_id: appId, tag_id: tagId, after: after.data.tags },
+      });
+    }
+    return ok({
+      action: "removed",
+      app_id: appId,
+      tag: { id: tagId, name: tagName },
+      after: after.data.tags,
+    });
   }
 
   // --- workspaces ---
@@ -86,6 +204,69 @@ export class ConsoleClient {
   }
   publish(appId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
     return this.call(`apps/${appId}/workflows/publish`, { body });
+  }
+
+  // --- workflow-as-tool providers ---
+  async getWorkflowTool(q: { appId?: string; toolId?: string }): Promise<Result<Record<string, unknown>>> {
+    const result = await this.call<Record<string, unknown>>("workspaces/current/tool-provider/workflow/get", {
+      query: { workflow_app_id: q.appId, workflow_tool_id: q.toolId },
+    });
+    // Dify versions have returned both 404 and 400/500 + "Tool not found" for
+    // this lookup. Normalize all of them to the stable NOT_FOUND contract.
+    if (!result.ok && /tool not found/i.test(result.error.message)) {
+      return err("NOT_FOUND", result.error.message, { details: result.error.details });
+    }
+    return result;
+  }
+  createWorkflowTool(body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call("workspaces/current/tool-provider/workflow/create", { body });
+  }
+  updateWorkflowTool(body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call("workspaces/current/tool-provider/workflow/update", { body });
+  }
+  deleteWorkflowTool(toolId: string): Promise<Result<unknown>> {
+    return this.call("workspaces/current/tool-provider/workflow/delete", {
+      body: { workflow_tool_id: toolId },
+    });
+  }
+  async refreshWorkflowToolProvider(appId: string): Promise<Result<unknown>> {
+    const current = await this.getWorkflowTool({ appId });
+    if (!current.ok && current.error.code !== "NOT_FOUND") return current;
+    if (current.ok && current.data.synced === true) {
+      return ok({ action: "unchanged", before: current.data, after: current.data });
+    }
+
+    const [app, draft] = await Promise.all([this.getApp(appId), this.getDraft(appId)]);
+    if (!app.ok) return app;
+    if (!draft.ok) return draft;
+    const existing = current.ok ? current.data : undefined;
+    const body = buildWorkflowToolPayload(
+      app.data as Record<string, unknown>,
+      draft.data as Record<string, unknown>,
+      existing,
+    );
+
+    let mutation: Result<unknown>;
+    let action: "created" | "updated";
+    if (existing) {
+      const toolId = nonEmptyString(existing.workflow_tool_id);
+      if (!toolId) return err("SERVER_ERROR", "workflow tool detail is missing workflow_tool_id");
+      action = "updated";
+      mutation = await this.updateWorkflowTool({ ...body, workflow_tool_id: toolId });
+    } else {
+      action = "created";
+      mutation = await this.createWorkflowTool({ ...body, workflow_app_id: appId });
+    }
+    if (!mutation.ok) return mutation;
+
+    const after = await this.getWorkflowTool({ appId });
+    if (!after.ok) return after;
+    if (after.data.synced !== true) {
+      return err("DSL_VERSION_MISMATCH", `workflow tool provider for app ${appId} is still out of sync`, {
+        details: { action, before: existing ?? null, after: after.data },
+      });
+    }
+    return ok({ action, before: existing ?? null, after: after.data });
   }
 
   // --- testing ---
@@ -493,4 +674,92 @@ export class ConsoleClient {
   agentSandboxUpload(agentId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
     return this.call(`agent/${agentId}/sandbox/files/upload`, { body });
   }
+}
+
+function buildWorkflowToolPayload(
+  app: Record<string, unknown>,
+  draft: Record<string, unknown>,
+  existing?: Record<string, unknown>,
+): Record<string, unknown> {
+  const appName = nonEmptyString(app.name) ?? "Workflow Tool";
+  const label = nonEmptyString(existing?.label) ?? appName;
+  const existingParameters = new Map<string, Record<string, unknown>>();
+  if (Array.isArray(existing?.parameters)) {
+    for (const item of existing.parameters) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const parameter = item as Record<string, unknown>;
+      const name = nonEmptyString(parameter.name);
+      if (name) existingParameters.set(name, parameter);
+    }
+  }
+
+  return {
+    name: nonEmptyString(existing?.name) ?? safeWorkflowToolName(label),
+    label,
+    description: typeof existing?.description === "string"
+      ? existing.description
+      : (typeof app.description === "string" ? app.description : ""),
+    icon: workflowToolIcon(app, existing),
+    parameters: workflowStartVariableNames(draft).map((name) => {
+      const previous = existingParameters.get(name);
+      return {
+        name,
+        description: typeof previous?.description === "string" ? previous.description : "",
+        form: typeof previous?.form === "string" ? previous.form : "form",
+      };
+    }),
+    labels: workflowToolLabels(existing),
+    privacy_policy: typeof existing?.privacy_policy === "string" ? existing.privacy_policy : "",
+  };
+}
+
+function workflowStartVariableNames(draft: Record<string, unknown>): string[] {
+  const graph = draft.graph;
+  if (!graph || typeof graph !== "object" || Array.isArray(graph)) return [];
+  const nodes = (graph as Record<string, unknown>).nodes;
+  if (!Array.isArray(nodes)) return [];
+  for (const item of nodes) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const data = (item as Record<string, unknown>).data;
+    if (!data || typeof data !== "object" || Array.isArray(data)) continue;
+    const node = data as Record<string, unknown>;
+    if (node.type !== "start" || !Array.isArray(node.variables)) continue;
+    return node.variables
+      .map((variable) => variable && typeof variable === "object" && !Array.isArray(variable)
+        ? nonEmptyString((variable as Record<string, unknown>).variable)
+          ?? nonEmptyString((variable as Record<string, unknown>).name)
+        : undefined)
+      .filter((name): name is string => Boolean(name));
+  }
+  return [];
+}
+
+function workflowToolIcon(
+  app: Record<string, unknown>,
+  existing?: Record<string, unknown>,
+): Record<string, string> {
+  if (existing?.icon && typeof existing.icon === "object" && !Array.isArray(existing.icon)) {
+    return existing.icon as Record<string, string>;
+  }
+  return {
+    content: nonEmptyString(app.icon) ?? "\ud83d\udd27",
+    background: nonEmptyString(app.icon_background) ?? "#FFEAD5",
+  };
+}
+
+function workflowToolLabels(existing?: Record<string, unknown>): string[] {
+  const tool = existing?.tool;
+  if (!tool || typeof tool !== "object" || Array.isArray(tool)) return [];
+  const labels = (tool as Record<string, unknown>).labels;
+  return Array.isArray(labels) ? labels.filter((label): label is string => typeof label === "string") : [];
+}
+
+function safeWorkflowToolName(label: string): string {
+  let name = label.replace(/[^A-Za-z0-9_]+/g, "_").replace(/_{3,}/g, "_").replace(/^_+|_+$/g, "");
+  if (!name) name = "workflow_tool";
+  return /^\d/.test(name) ? `tool_${name}` : name;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value : undefined;
 }

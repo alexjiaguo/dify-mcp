@@ -1,7 +1,7 @@
 {
   "name": "dify-mcp",
   "version": "0.1.0",
-  "description": "The most complete Dify MCP server + CLI \u2014 138 tools that let any AI agent build, test & ship Dify workflows autonomously",
+  "description": "The most complete Dify MCP server + CLI \u2014 143 tools that let any AI agent build, test & ship Dify workflows autonomously",
   "type": "module",
   "bin": {
     "difywf": "bin/difywf.js"

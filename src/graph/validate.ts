@@ -180,7 +180,12 @@ export function validateGraph(
   for (const n of nodes) {
     const t = nodeType(n);
     if (!t || !n.data) continue;
-    const required = requiredFields(t, opts?.defaults);
+    // Current Dify serializes multi-branch if/else nodes as `cases[]`, with
+    // conditions and logical_operator nested per case. Older single-branch
+    // exports keep those two fields at node.data. Accept either losslessly.
+    const modernIfCases =
+      t === "if-else" && Array.isArray(n.data.cases) && n.data.cases.length > 0;
+    const required = modernIfCases ? [] : requiredFields(t, opts?.defaults);
     for (const field of required) {
       if (n.data[field] === undefined) {
         issues.push({ level: "error", code: "MISSING_REQUIRED_FIELD", message: `node '${n.id}' (${t}) missing required field '${field}'`, nodeId: n.id });

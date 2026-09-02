@@ -49,7 +49,8 @@ Minimal required fields per type (validator enforces these):
 - llm: model{provider,name,mode}, prompt_template[]
 - code: code_language, code, outputs   http-request: method, url
 - knowledge-retrieval: query_variable_selector, dataset_ids
-- if-else: conditions, logical_operator   variable-aggregator: variables
+- if-else: non-empty cases[] OR legacy conditions + logical_operator
+  variable-aggregator: variables
 - tool: provider_id, provider_type, tool_name
 - parameter-extractor: query, model, parameters   assigner: items
 - iteration: iterator_selector, start_node_id   loop: start_node_id

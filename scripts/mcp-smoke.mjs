@@ -53,7 +53,7 @@ notify("notifications/initialized");
 const list = await send("tools/list", {});
 const names = (list?.tools ?? []).map((t) => t.name);
 if (names.length < 15) fail(`expected >=15 tools, got ${names.length}`);
-for (const required of ["agent_guide", "workflow_validate", "workflow_sync_draft", "workflow_publish", "app_create"]) {
+for (const required of ["agent_guide", "workflow_validate", "workflow_sync_draft", "workflow_publish", "workflow_tool_refresh_provider", "app_create"]) {
   if (!names.includes(required)) fail(`missing tool ${required}`);
 }
 console.log(`tools/list OK (${names.length} tools)`);

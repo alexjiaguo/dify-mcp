@@ -10,7 +10,11 @@ import { runTool, tools } from "./tools/registry.ts";
 
 const VERSION = "0.1.0";
 
-const NS_ALIASES: Record<string, string> = { wf: "workflow", providers: "provider", plugins: "plugin" };
+const NS_ALIASES: Record<string, string> = {
+  wf: "workflow",
+  providers: "provider",
+  plugins: "plugin",
+};
 const CMD_ALIASES: Record<string, string> = {
   "workflow test": "workflow.run_draft",
   "workflow draft get": "workflow.get_draft",
@@ -19,10 +23,11 @@ const CMD_ALIASES: Record<string, string> = {
   "workflow node run": "workflow.run_node",
 };
 const POSITIONALS: Record<string, string[]> = {
-  "app.get": ["app_id"], "app.update": ["app_id"], "app.delete": ["app_id"], "app.export": ["app_id"],
+  "app.get": ["app_id"], "app.update": ["app_id"], "app.list_tags": ["app_id"], "app.ensure_tag": ["app_id", "tag"], "app.remove_tag": ["app_id", "tag"], "app.delete": ["app_id"], "app.export": ["app_id"],
   "workflow.get_draft": ["app_id"], "workflow.node_defaults": ["app_id", "node_type"], "workflow.sync_draft": ["app_id"],
   "workflow.run_draft": ["app_id"], "workflow.run": ["app_id"], "workflow.publish": ["app_id"],
   "workflow.run_node": ["app_id", "node_id"], "workflow.events": ["app_id", "task_id"], "workflow.stop": ["app_id", "task_id"],
+  "workflow.tool_get": ["app_id"], "workflow.tool_refresh_provider": ["app_id"], "workflow.tool_delete": ["workflow_tool_id"],
   "provider.models": ["provider"],
   "workflow.get_features": ["app_id"], "workflow.set_features": ["app_id"],
   "workflow.list_env_vars": ["app_id"], "workflow.list_conv_vars": ["app_id"],
@@ -61,7 +66,10 @@ const POSITIONALS: Record<string, string[]> = {
   "agent.sandbox_info": ["agent_id"], "agent.sandbox_files": ["agent_id"], "agent.sandbox_read": ["agent_id"], "agent.sandbox_upload": ["agent_id"],
   "agent.guide": ["section"],
 };
-const CONTROL_FLAGS = new Set(["o", "output", "help", "h", "version", "base-url", "workspace", "openapi-token", "console-token"]);
+const CONTROL_FLAGS = new Set([
+  "o", "output", "output-file", "help", "h", "version", "base-url", "workspace",
+  "openapi-token", "console-token",
+]);
 
 export function parseFlags(argv: string[]): { positional: string[]; flags: Record<string, unknown> } {
   const positional: string[] = [];
@@ -98,6 +106,23 @@ export function parseFlags(argv: string[]): { positional: string[]; flags: Recor
     }
   }
   return { positional, flags };
+}
+
+export function resolveConsoleLoginCredentials(
+  flags: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
+): { email?: string; password?: string; passwordEncoding: "plain" | "base64" } {
+  const rawEncoding = str(flags["password-encoding"])
+    ?? str(env.DIFY_CONSOLE_PASSWORD_ENCODING)
+    ?? "plain";
+  if (rawEncoding !== "plain" && rawEncoding !== "base64") {
+    throw new Error("password encoding must be 'plain' or 'base64'");
+  }
+  return {
+    email: str(flags.email) ?? str(env.DIFY_CONSOLE_EMAIL),
+    password: str(flags.password) ?? str(env.DIFY_CONSOLE_PASSWORD),
+    passwordEncoding: rawEncoding,
+  };
 }
 
 export async function main(): Promise<void> {
@@ -151,6 +176,7 @@ function buildArgs(flags: Record<string, unknown>): Record<string, unknown> {
     else if (k === "input") args.inputs = kvList(v, "input");
     else if (k === "graph") args.graph = readJsonArg(v, "graph");
     else if (k === "graph-json") args.graph_json = String(v);
+    else if (k === "yaml") args.yaml = readTextArg(v, "yaml");
     else if (k === "credentials") args.credentials = readJsonArg(v, "credentials");
     else if (k === "app-id") args.app_id = v;
     else if (k === "node-id") args.node_id = v;
@@ -160,6 +186,18 @@ function buildArgs(flags: Record<string, unknown>): Record<string, unknown> {
     else args[k.replaceAll("-", "_")] = typeof v === "string" && (v.startsWith("{") || v.startsWith("[")) ? readJsonArg(v, k) : v;
   }
   return args;
+}
+
+// Large DSLs exceed the operating system's per-argument limit. Keep literal
+// YAML backward compatible while allowing the same explicit @file/stdin
+// channel already used by --graph.
+export function readTextArg(value: unknown, name: string): string {
+  const s = String(value);
+  if (s === "-") return fs.readFileSync(0, "utf8");
+  if (!s.startsWith("@")) return s;
+  const p = s.slice(1);
+  if (!fs.existsSync(p)) throw new Error(`--${name}: file not found: ${p}`);
+  return fs.readFileSync(p, "utf8");
 }
 
 // --graph/--credentials accept: "-" (stdin), "@file"/path, or an inline JSON string.
@@ -223,10 +261,23 @@ async function authMain(args: string[], flags: Record<string, unknown>): Promise
     }
     case "login-console": {
       const base = needBase();
-      const email = str(flags.email);
-      const password = str(flags.password);
-      if (!email || !password) return finish(err("USAGE_ERROR", "login-console needs --email and --password"), flags);
-      const result = await consoleLogin(base, email, password);
+      let credentials: ReturnType<typeof resolveConsoleLoginCredentials>;
+      try {
+        credentials = resolveConsoleLoginCredentials(flags);
+      } catch (e) {
+        return finish(err("USAGE_ERROR", e instanceof Error ? e.message : String(e)), flags);
+      }
+      const { email, password, passwordEncoding } = credentials;
+      if (!email || !password) {
+        return finish(
+          err(
+            "USAGE_ERROR",
+            "login-console needs --email/--password or DIFY_CONSOLE_EMAIL/DIFY_CONSOLE_PASSWORD",
+          ),
+          flags,
+        );
+      }
+      const result = await consoleLogin(base, email, password, passwordEncoding);
       if (result.ok) storeCookies(base, result.data);
       return finish(result.ok ? { ok: true, data: { stored: true, base_url: base, cookies: Object.keys(result.data) } } : (result as Result<unknown>), flags);
     }
@@ -262,6 +313,13 @@ async function authMain(args: string[], flags: Record<string, unknown>): Promise
 
 function finish(result: Result<unknown>, flags: Record<string, unknown>): void {
   const format = String(flags.o ?? flags.output ?? "json");
+  const outputFile = str(flags["output-file"]);
+  if (outputFile) {
+    const rendered = format === "yaml" ? toYaml(result) + "\n" : JSON.stringify(result) + "\n";
+    fs.writeFileSync(outputFile, rendered, { encoding: "utf8" });
+    process.stdout.write(JSON.stringify({ ok: true, output_file: outputFile }) + "\n");
+    process.exit(result.ok ? EXIT.OK : EXIT[result.error.code]);
+  }
   if (format === "yaml") {
     process.stdout.write(toYaml(result) + "\n");
   } else if (format === "text") {
@@ -295,12 +353,16 @@ function printHelp(positional: string[]): void {
     "",
     "GLOBAL FLAGS",
     "  -o, --output json|yaml|text   output format (default json; MCP always json)",
+    "  --output-file <path>          write the full result to a file; stdout returns a small acknowledgement",
     "  --base-url <url>              Dify base URL (or DIFY_API_BASE)",
     "  --workspace <id>              workspace id (or DIFY_WORKSPACE_ID)",
     "  --openapi-token / --console-token   tokens (or DIFY_OPENAPI_TOKEN / DIFY_CONSOLE_TOKEN)",
+    "  --email / --password            console login (or DIFY_CONSOLE_EMAIL / DIFY_CONSOLE_PASSWORD)",
+    "  --password-encoding <plain|base64>  login payload encoding (or DIFY_CONSOLE_PASSWORD_ENCODING)",
     "  --yes                         confirm destructive ops (maps to confirm=true)",
     "  --dry-run                     validate + diff without saving",
     "  --graph <file|-|{json}>       graph input: file, stdin, or inline JSON",
+    "  --yaml <@file|-|yaml>         app-import DSL: explicit file, stdin, or inline YAML",
     "  --input k=v                   workflow input (repeatable)",
     "",
     "Start with: difywf agent guide",

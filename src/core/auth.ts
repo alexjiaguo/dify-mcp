@@ -81,9 +81,13 @@ export async function consoleLogin(
   baseUrl: string,
   email: string,
   password: string,
+  passwordEncoding: "plain" | "base64" = "plain",
 ): Promise<Result<Record<string, string>>> {
+  const encodedPassword = passwordEncoding === "base64"
+    ? Buffer.from(password, "utf8").toString("base64")
+    : password;
   const r = await fetchCapturingCookies(baseUrl, "/console/api/login", {
-    body: { email, password, remember_me: true, language: "en-US" },
+    body: { email, password: encodedPassword, remember_me: true, language: "en-US" },
   });
   if (!r.ok) return r;
   const cookies = r.data.cookies;
