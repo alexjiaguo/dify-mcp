@@ -7,6 +7,8 @@
 // Dify fixtures. Unknown/uncertain node types are skipped with a warning, not
 // errored. Runtime-fetched node defaults supersede this table.
 
+import { isPrivateUrl } from "../core/private-url.ts";
+
 export type GraphNode = {
   id: string;
   type?: string;
@@ -61,6 +63,7 @@ const KNOWN_TYPES = new Set([
   "assigner",
   "variable-assigner",
   "agent",
+  "agent-v2",
   "human-input",
   "datasource",
   "knowledge-index",
@@ -74,10 +77,16 @@ const REF_SKIP = new Set(["sys", "env", "conversation"]);
 
 const VAR_REF = /\{\{#([A-Za-z0-9_-]+)\.([A-Za-z0-9_.\[\]-]+)#\}\}/g;
 
-const nodeType = (n: GraphNode): string | undefined =>
+export const graphNodeType = (n: GraphNode): string | undefined =>
   // Note: use `||` not `??` — decorative nodes (custom-note) carry an empty
   // string data.type, so fall through to the node-level `type` (e.g. "custom-note").
   ((n.data?.type as string | undefined) || undefined) ?? n.type;
+
+const nodeType = graphNodeType;
+
+export function graphHasCodeNodes(graph: Graph): boolean {
+  return (graph.nodes ?? []).some((n) => graphNodeType(n) === "code");
+}
 
 // Canvas-only decorative nodes: not executable, intentionally unconnected.
 // Excluded from reachability checks. `custom-note` is Dify's sticky-note
@@ -190,6 +199,14 @@ export function validateGraph(
       if (n.data[field] === undefined) {
         issues.push({ level: "error", code: "MISSING_REQUIRED_FIELD", message: `node '${n.id}' (${t}) missing required field '${field}'`, nodeId: n.id });
       }
+    }
+    if (t === "http-request" && typeof n.data.url === "string" && isPrivateUrl(n.data.url)) {
+      issues.push({
+        level: "warning",
+        code: "PRIVATE_URL",
+        message: `node '${n.id}' http-request URL targets a private/loopback host`,
+        nodeId: n.id,
+      });
     }
   }
 

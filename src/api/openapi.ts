@@ -4,6 +4,7 @@
 
 import { apiCall, readSse, type RequestOpts } from "../core/http.ts";
 import type { Result } from "../core/contract.ts";
+import { isFilePayload, toFormData } from "../core/multipart.ts";
 
 export class OpenapiClient {
   base: string;
@@ -37,8 +38,16 @@ export class OpenapiClient {
     return readSse(`${this.base}/openapi/v1`, `apps/${appId}/tasks/${taskId}/events`, { token: this.token });
   }
 
-  exportDsl(appId: string): Promise<Result<string>> {
-    return this.call<string>(`apps/${appId}/dsl`, { raw: true });
+  exportDsl(appId: string, includeSecret = false): Promise<Result<string>> {
+    return this.call<string>(`apps/${appId}/dsl`, {
+      raw: true,
+      query: { include_secret: includeSecret ? "true" : "false" },
+    });
+  }
+
+  uploadFile(appId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
+    const payload = isFilePayload(body) ? toFormData(body) : body;
+    return this.call(`apps/${appId}/files`, { body: payload });
   }
 
   importDsl(workspaceId: string, payload: Record<string, unknown>): Promise<Result<unknown>> {
@@ -65,9 +74,6 @@ export class OpenapiClient {
   }
   listMembers(workspaceId: string): Promise<Result<unknown>> {
     return this.call(`workspaces/${workspaceId}/members`);
-  }
-  uploadFile(appId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
-    return this.call(`apps/${appId}/files`, { body });
   }
   hitlFormGet(appId: string, formToken: string): Promise<Result<unknown>> {
     return this.call(`apps/${appId}/human-input-forms/${formToken}`);

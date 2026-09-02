@@ -10,6 +10,7 @@ export type RequestOpts = {
   raw?: boolean; // return response text instead of parsed JSON
   cookies?: Record<string, string>; // console session cookies (cookie-auth surface)
   csrfToken?: string; // X-CSRF-Token header value (double-submit CSRF)
+  timeoutMs?: number;
 };
 
 const STATUS_MAP: Record<number, ErrCode> = {
@@ -20,8 +21,42 @@ const STATUS_MAP: Record<number, ErrCode> = {
   429: "RATE_LIMITED",
 };
 
+export const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
+export const DEFAULT_SSE_TIMEOUT_MS = 300_000;
+
 export function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+function timeoutMs(explicit: number | undefined, fallback: number, envName: string): number {
+  if (typeof explicit === "number" && explicit > 0) return explicit;
+  const fromEnv = Number(process.env[envName]);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return fallback;
+}
+
+function encodeBody(body: unknown): { extra: Record<string, string>; payload: BodyInit | undefined } {
+  if (body === undefined) return { extra: {}, payload: undefined };
+  if (typeof FormData !== "undefined" && body instanceof FormData) {
+    return { extra: {}, payload: body };
+  }
+  return { extra: { "Content-Type": "application/json" }, payload: JSON.stringify(body) };
+}
+
+export function classifyHttpFailure(status: number, data: unknown, text: string): Result<never> {
+  const message = extractMessage(data) ?? `HTTP ${status}`;
+  const blob = `${message} ${data && typeof data === "object" ? JSON.stringify(data) : text}`;
+  if (status === 400 && /not.?sync|hash.?not.?equal|DraftWorkflowNotSync|WorkflowHashNotEqual/i.test(blob)) {
+    return err("VALIDATION_FAILED", message, {
+      retryable: true,
+      details: data ?? text.slice(0, 500),
+    });
+  }
+  const code = status >= 500 ? "SERVER_ERROR" : (STATUS_MAP[status] ?? "SERVER_ERROR");
+  return err(code, message, {
+    retryable: status >= 500 || status === 429,
+    details: data ?? text.slice(0, 500),
+  });
 }
 
 export async function apiCall<T = unknown>(
@@ -33,17 +68,18 @@ export async function apiCall<T = unknown>(
   for (const [k, v] of Object.entries(opts.query ?? {})) {
     if (v !== undefined) url.searchParams.set(k, String(v));
   }
-  const headers: Record<string, string> = { Accept: "application/json" };
+  const encoded = encodeBody(opts.body);
+  const headers: Record<string, string> = { Accept: "application/json", ...encoded.extra };
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   applyCookies(headers, opts);
-  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
 
   let res: Response;
   try {
     res = await fetch(url, {
       method: opts.method ?? (opts.body !== undefined ? "POST" : "GET"),
       headers,
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      body: encoded.payload,
+      signal: AbortSignal.timeout(timeoutMs(opts.timeoutMs, DEFAULT_HTTP_TIMEOUT_MS, "DIFYWF_HTTP_TIMEOUT_MS")),
     });
   } catch (e) {
     return err("NETWORK_ERROR", `request failed: ${e instanceof Error ? e.message : String(e)}`, {
@@ -53,19 +89,10 @@ export async function apiCall<T = unknown>(
 
   const text = await res.text();
   const data = text ? safeJson(text) : null;
-  if (!res.ok) {
-    const code = res.status >= 500 ? "SERVER_ERROR" : (STATUS_MAP[res.status] ?? "SERVER_ERROR");
-    return err(code, extractMessage(data) ?? `HTTP ${res.status}`, {
-      retryable: res.status >= 500 || res.status === 429,
-      details: data ?? text.slice(0, 500),
-    });
-  }
+  if (!res.ok) return classifyHttpFailure(res.status, data, text) as Result<never>;
   return ok((opts.raw ? text : data) as T);
 }
 
-// Collects an SSE stream into an array of parsed events.
-// ponytail: no live streaming to the caller yet; add incremental output when
-// a host actually needs it (both surfaces currently want the full result).
 export async function readSse(
   base: string,
   path: string,
@@ -75,17 +102,18 @@ export async function readSse(
   for (const [k, v] of Object.entries(opts.query ?? {})) {
     if (v !== undefined) url.searchParams.set(k, String(v));
   }
-  const headers: Record<string, string> = { Accept: "text/event-stream" };
+  const encoded = encodeBody(opts.body);
+  const headers: Record<string, string> = { Accept: "text/event-stream", ...encoded.extra };
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   applyCookies(headers, opts);
-  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
 
   let res: Response;
   try {
     res = await fetch(url, {
       method: opts.body !== undefined ? "POST" : (opts.method ?? "GET"),
       headers,
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      body: encoded.payload,
+      signal: AbortSignal.timeout(timeoutMs(opts.timeoutMs, DEFAULT_SSE_TIMEOUT_MS, "DIFYWF_SSE_TIMEOUT_MS")),
     });
   } catch (e) {
     return err("NETWORK_ERROR", `stream failed: ${e instanceof Error ? e.message : String(e)}`, {
@@ -95,11 +123,7 @@ export async function readSse(
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => "");
     const data = text ? safeJson(text) : null;
-    const code = res.status >= 500 ? "SERVER_ERROR" : (STATUS_MAP[res.status] ?? "SERVER_ERROR");
-    return err(code, extractMessage(data) ?? `HTTP ${res.status}`, {
-      retryable: res.status >= 500,
-      details: data,
-    });
+    return classifyHttpFailure(res.status, data, text);
   }
 
   const reader = res.body.getReader();
@@ -141,8 +165,6 @@ function extractMessage(data: unknown): string | null {
   return null;
 }
 
-
-// --- cookie + CSRF helpers (console surface uses cookie-auth, not Bearer) ---
 export function applyCookies(headers: Record<string, string>, opts: RequestOpts): void {
   if (opts.cookies) {
     const c = Object.entries(opts.cookies)
@@ -157,7 +179,6 @@ export function buildCookieHeader(cookies: Record<string, string>): string {
   return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
 }
 
-// Parse Set-Cookie response headers into a {name: value} map (attributes dropped).
 export function parseSetCookies(res: Response): Record<string, string> {
   const out: Record<string, string> = {};
   const getter = (res.headers as { getSetCookie?: () => string[] }).getSetCookie;
@@ -170,7 +191,6 @@ export function parseSetCookies(res: Response): Record<string, string> {
   return out;
 }
 
-// Like apiCall but also returns Set-Cookie values (for login / refresh-token).
 export async function fetchCapturingCookies(
   base: string,
   path: string,
@@ -180,16 +200,17 @@ export async function fetchCapturingCookies(
   for (const [k, v] of Object.entries(opts.query ?? {})) {
     if (v !== undefined) url.searchParams.set(k, String(v));
   }
-  const headers: Record<string, string> = { Accept: "application/json" };
+  const encoded = encodeBody(opts.body);
+  const headers: Record<string, string> = { Accept: "application/json", ...encoded.extra };
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   applyCookies(headers, opts);
-  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
   let res: Response;
   try {
     res = await fetch(url, {
       method: opts.method ?? (opts.body !== undefined ? "POST" : "GET"),
       headers,
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      body: encoded.payload,
+      signal: AbortSignal.timeout(timeoutMs(opts.timeoutMs, DEFAULT_HTTP_TIMEOUT_MS, "DIFYWF_HTTP_TIMEOUT_MS")),
     });
   } catch (e) {
     return err("NETWORK_ERROR", `request failed: ${e instanceof Error ? e.message : String(e)}`, {
@@ -199,12 +220,6 @@ export async function fetchCapturingCookies(
   const text = await res.text();
   const data = text ? safeJson(text) : null;
   const cookies = parseSetCookies(res);
-  if (!res.ok) {
-    const code = res.status >= 500 ? "SERVER_ERROR" : (STATUS_MAP[res.status] ?? "SERVER_ERROR");
-    return err(code, extractMessage(data) ?? `HTTP ${res.status}`, {
-      retryable: res.status >= 500 || res.status === 429,
-      details: data ?? text.slice(0, 500),
-    });
-  }
+  if (!res.ok) return classifyHttpFailure(res.status, data, text);
   return ok({ data, cookies });
 }

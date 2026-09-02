@@ -14,14 +14,20 @@ return the same contract: { "ok": bool, "data": ..., "error": { "code",
 Targets: Dify v1.x, DSL version 0.7.0, workflow engine graphon 0.6.0.
 App modes: workflow | chatflow (advanced-chat) | chat | agent (agent-chat) | completion.
 
-Auth: OpenAPI surface (/openapi/v1) needs an OpenAPI token (device flow via
-\`difywf auth login\`, or DIFY_OPENAPI_TOKEN). The authoring surface
-(/console/api) uses cookie+CSRF auth (not Bearer): capture cookies via
-\`difywf auth import-cookies --file cookies.json\` (browser cookie-editor
-JSON export; auto-picks the 3 auth cookies), \`difywf auth login-console\`
-(email/password), or \`difywf auth token --console-cookie\` (raw Cookie header).
-difywf stores and auto-refreshes them via the refresh_token cookie. Base URL: --base-url,
-DIFY_API_BASE, or the active host in ~/.difywf/hosts.json. Check with \`difywf auth status\`.`,
+Auth: the authoring surface (/console/api) uses cookie+CSRF, not Bearer.
+MCP tools: \`auth.import_cookies\`, \`auth.login_console\`, \`auth.set_tokens\`,
+\`auth.status\`. CLI: \`difywf auth import-cookies --file cookies.json\`
+(browser cookie-editor JSON; auto-picks the 3 auth cookies),
+\`difywf auth login-console\`, or \`difywf auth token --console-cookie\`.
+You can also set DIFY_CONSOLE_COOKIE (Cookie header or JSON) or
+--console-cookie. Sessions auto-refresh via the refresh_token cookie.
+OpenAPI (/openapi/v1) is optional fallback for list/run/export when a
+device token is present (\`difywf auth login\` or DIFY_OPENAPI_TOKEN).
+Base URL: --base-url, DIFY_API_BASE, or the active host in ~/.difywf/hosts.json
+(or $DIFYWF_HOME). Check with \`auth.status\`.
+HTTP MCP: stdio is trusted; Streamable HTTP binds 127.0.0.1 by default.
+Non-loopback binds require DIFYWF_MCP_TOKEN (Authorization: Bearer or
+x-difywf-token). /health stays unauthenticated for probes.`,
 
   quickstart: `# Golden path: spec -> published workflow
 1. app.list / app.get — find or create the app (app.create with mode).
@@ -36,7 +42,9 @@ DIFY_API_BASE, or the active host in ~/.difywf/hosts.json. Check with \`difywf a
 7. workflow.publish with confirm=true — requires a model provider to be
    configured first (provider.list / provider.set_credentials).
 If sync_draft fails with a stale-hash error: refetch workflow.get_draft and
-retry with the fresh hash (error is marked retryable).`,
+retry with the fresh hash (VALIDATION_FAILED, retryable=true). Omitting
+environment_variables / conversation_variables keeps the current draft
+values — it does not wipe secrets.`,
 
   nodes: `# Node types (fetch full schema per type via workflow.node_defaults)
 start, end, answer, llm, knowledge-retrieval, question-classifier, if-else,
@@ -70,10 +78,15 @@ RATE_LIMITED(9)/SERVER_ERROR(10)/NETWORK_ERROR(11) — retryable, back off.`,
 - Destructive ops (publish, app.delete, provider.set_credentials) require
   confirm=true. Do not set it unless the human's instruction clearly implies it.
 - Prefer dry_run=true before sync_draft on apps you did not create.
-- Graphs containing code nodes execute code server-side. Say so when you add one.
+- Graphs containing code nodes execute code server-side. Default policy is
+  confirm=true (DIFYWF_CODE_NODES=confirm|allow|forbid).
+- http-request URLs targeting private/loopback hosts warn (PRIVATE_URL).
+  yaml_url imports to private hosts are rejected unless DIFYWF_ALLOW_PRIVATE_URL=1.
+- File uploads take {name, content_b64, mime?} and are sent as multipart.
+- app.export include_secret=true requires confirm=true.
 - Never exfiltrate secrets: env/conversation variables and provider credentials
   may contain keys. Do not copy them into prompts, logs, or other apps.
-- Every action is written to ~/.difywf/audit.jsonl.`,
+- Every action is written to ~/.difywf/audit.jsonl (nested secrets redacted, mode 0600).`,
   more: `# More surfaces (Phase 3)
 Beyond app workflows, difywf drives the rest of the Dify console surface:
 
@@ -90,8 +103,8 @@ Beyond app workflows, difywf drives the rest of the Dify console surface:
 - Agent config / drive / sandbox (agent.*): config manifest/skills/files (upload),
   drive files/skills (inspect/preview/download), and per-agent sandbox
   info/files/read/upload. Multipart uploads (annotation batch_import, agent
-  skill/file/sandbox uploads) take a file payload object; exact multipart shape
-  is finalized in the live-verification step.
+  skill/file/sandbox uploads) take a file payload object {name, content_b64, mime?}
+  sent as multipart FormData.
 
 These mirror the app-workflow tools: same contract, same confirm gates, same
 audit log. Fetch node_defaults before authoring rag/snippet graphs too.`,

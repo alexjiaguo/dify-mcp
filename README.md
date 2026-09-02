@@ -4,12 +4,12 @@
 
 ### The most complete MCP server + CLI for [Dify](https://github.com/langgenius/dify)
 
-**143 tools. 16 namespaces. One registry.** Let any AI agent build, test, and ship
+**153 tools. 18 namespaces. One registry.** Let any AI agent build, test, and ship
 Dify workflows autonomously — everything a human can do in the UI, now scriptable.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node >= 23.6](https://img.shields.io/badge/node-%E2%89%A523.6-green.svg)](https://nodejs.org)
-[![143 Tools](https://img.shields.io/badge/tools-143-purple.svg)](#tools)
+[![153 Tools](https://img.shields.io/badge/tools-153-purple.svg)](#tools)
 [![Live Verified](https://img.shields.io/badge/live--verified-cloud.dify.ai-brightgreen.svg)](#live-verified)
 
 Works with **Claude Code** · **Codex** · **Gemini CLI** · **Cursor** · **Cline** · **Windsurf** · **Roo Code** · **Continue** · **Aider** · **Zed** — and any other MCP-compatible or shell-capable agent.
@@ -26,7 +26,7 @@ create workflows, wire up nodes, test them, iterate, and publish — without a b
 
 **dify-mcp** is the bridge. It exposes the **entire Dify console API** as a unified
 tool registry with **two surfaces**: a CLI any shell-capable agent can drive, and an
-MCP server (stdio or Streamable HTTP) any MCP-compatible host can attach. Same 143 tools, same JSON
+MCP server (stdio or Streamable HTTP) any MCP-compatible host can attach. Same 153 tools, same JSON
 contract, same safety guarantees.
 
 ```
@@ -34,7 +34,7 @@ contract, same safety guarantees.
 │                    dify-mcp                              │
 │                                                          │
 │   ┌──────────┐    ┌────────────────────┐    ┌─────────┐ │
-│   │  CLI     │───▶│   143-tool         │───▶│  Dify   │ │
+│   │  CLI     │───▶│   153-tool         │───▶│  Dify   │ │
 │   │  difywf  │    │   registry         │    │  API    │ │
 │   └──────────┘    │                    │    └─────────┘ │
 │   ┌──────────┐    │  app · workflow    │         ▲      │
@@ -82,8 +82,10 @@ Don't see your agent? If it supports MCP or can run shell commands, it works. Th
   `--output-file <path>` keeps the full UTF-8 result off size-limited stdout transports.
 
 - **Cookie auth, handled.** Dify's console uses cookie + CSRF double-submit, not
-  Bearer tokens. dify-mcp captures, stores, and auto-refreshes the session — including
-  the server-side refresh-token rotation that silently invalidates naive clients.
+  Bearer tokens. dify-mcp captures, stores (keychain on macOS, else `0600` file),
+  and auto-refreshes the session — including server-side refresh-token rotation.
+  MCP hosts can call `auth.import_cookies` / `auth.login_console` without the CLI.
+  `DIFY_CONSOLE_COOKIE` and `--console-cookie` work for non-interactive bootstrap.
 
 - **Safe by default.** Destructive operations require explicit `confirm=true` /
   `--yes`. Graphs are validated offline before sync. Every mutation is audit-logged.
@@ -97,10 +99,11 @@ Don't see your agent? If it supports MCP or can run shell commands, it works. Th
 Every tool category has been tested against **cloud.dify.ai** with real credentials:
 
 - ✅ Full authoring loop: create app → sync draft → run draft → publish → list versions
-- ✅ All 16 namespaces exercised: apps, workflows, providers, plugins, triggers,
-  snippets, RAG, agents, stats, comments, annotations, audio, files, runs, workspace
+- ✅ All 18 namespaces exercised: apps, workflows, providers, plugins, triggers,
+  snippets, RAG, agents, stats, comments, annotations, audio, files, runs, workspace,
+  archive, explore, auth
 - ✅ MCP transport: `tools/call` over stdio and Streamable HTTP with live cookie auth
-- ✅ Unit tests · typecheck clean · MCP smoke (143 tools)
+- ✅ Unit tests · typecheck clean · MCP smoke (153 tools)
 
 ## Quickstart
 
@@ -135,6 +138,10 @@ DIFY_CONSOLE_EMAIL=you@x DIFY_CONSOLE_PASSWORD='***' \
   difywf auth login-console --base-url https://your-dify
 
 difywf auth status   # confirm: shows base URL + cookie names (values masked)
+
+# Non-interactive cookie bootstrap (Cookie header or cookie-editor JSON):
+# DIFY_CONSOLE_COOKIE='console_token=...; csrf_token=...; refresh_token=...' \
+#   difywf auth status --base-url https://cloud.dify.ai
 ```
 
 ### Build a workflow
@@ -156,7 +163,7 @@ difywf workflow tool refresh-provider <app-id> --yes        # rebind workflow-as
 
 ### Connect your agent (MCP)
 
-Same binary, same 143 tools. Copy-paste the config for your host:
+Same binary, same 153 tools. Copy-paste the config for your host:
 
 <details>
 <summary><b>Claude Code</b></summary>
@@ -251,6 +258,10 @@ difywf mcp serve --http --host 127.0.0.1 --port 8080
 #             DIFYWF_MCP_PORT=8080 difywf mcp serve
 ```
 
+Loopback binds do not need a token. Binding `0.0.0.0` (including Docker)
+requires `DIFYWF_MCP_TOKEN`. Clients send `Authorization: Bearer <token>` or
+`x-difywf-token`. `GET /health` stays unauthenticated for probes.
+
 Point any Streamable-HTTP-capable client at `http://<host>:8080/mcp`. Each POST is
 a self-contained JSON-RPC message (initialize / tools/list / tools/call); no
 session is required. GET and DELETE requests to `/mcp` are rejected with 405.
@@ -262,57 +273,61 @@ docker build -t dify-mcp .
 docker run -d --name dify-mcp \
   -p 3000:3000 \
   -e DIFY_API_BASE=https://your-dify.example.com \
-  -e DIFY_OPENAPI_TOKEN=your-token \
+  -e DIFYWF_MCP_TOKEN=generate-a-long-random-token \
+  -e DIFY_CONSOLE_COOKIE='console_token=...; csrf_token=...; refresh_token=...' \
+  -v difywf-home:/home/node/.difywf \
   dify-mcp
 ```
 
-The MCP URL to configure in Dify is `http://<docker-host>:3000/mcp`. When Dify
-and this service run in the same Docker Compose network, use the service name,
-for example `http://dify-mcp:3000/mcp`. The container health endpoint is
-`GET /health`. The `difywf` CLI is also available inside the container, for
-example `docker exec dify-mcp difywf --version`.
+The MCP URL to configure in Dify is `http://<docker-host>:3000/mcp` plus the
+Bearer token. When Dify and this service run in the same Docker Compose network,
+use the service name, for example `http://dify-mcp:3000/mcp`. The container
+health endpoint is `GET /health`. The `difywf` CLI is also available inside the
+container, for example `docker exec dify-mcp difywf --version`.
 
-Console-only tools may additionally require `DIFY_CONSOLE_TOKEN` and
-`DIFY_WORKSPACE_ID`. Prefer Docker secrets or your deployment platform's secret
-store instead of putting tokens in the image.
+Prefer Docker secrets or your deployment platform's secret store instead of
+putting cookies or tokens in the image.
 </details>
 
 > No `difywf` on PATH? Use the absolute path: `node /path/to/dify-mcp/bin/difywf.js mcp serve`.
 
 ## Tools
 
-**143 tools across 16 namespaces.** Run `difywf --help` for the full live list, or
+**153 tools across 18 namespaces.** Run `difywf --help` for the full live list, or
 `difywf agent guide` for the agent-oriented playbook.
 
 | Namespace | Tools | What it does |
 |-----------|-------|-------------|
-| `app` | 16 | List, create, update, tag, untag, delete, export, import, copy, rename, convert apps |
-| `workflow` | 25 | Get/sync drafts, validate, run, publish, workflow-tool providers, node defaults, variables, versions, HITL |
+| `app` | 17 | List, create, update, tag, untag, delete, export, import, copy, rename, convert, chat, complete |
+| `workflow` | 29 | Get/sync drafts, validate, run, publish, workflow-tool providers, node last-run, variables, versions, HITL |
 | `provider` | 3 | List providers, list models, set credentials |
-| `plugin` | 1 | List installed plugins |
+| `plugin` | 4 | List, get, install, uninstall plugins |
 | `trigger` | 4 | Create, enable, list, webhook triggers; run triggers |
 | `workspace` | 4 | List, get, switch workspaces; list members |
-| `file` | 1 | Upload files for use in runs |
+| `file` | 1 | Upload files for use in runs (multipart `{name, content_b64}`) |
 | `runs` | 4 | List, get, node executions, export run traces |
 | `stats` | 5 | Daily conversations/terminals, token costs, app interactions, online users |
 | `comment` | 3 | List, add, resolve workflow comments |
-| `annotation` | 12 | List, add, delete, reply, settings, export, batch import, hit histories |
+| `annotation` | 11 | List, add, delete, reply, settings, export, batch import, hit histories |
 | `audio` | 3 | Transcribe (STT), synthesize (TTS), list voices |
-| `rag` | 20 | Full RAG pipeline lifecycle: datasets, templates, draft, sync, run, publish, versions |
+| `rag` | 18 | Full RAG pipeline lifecycle: datasets, templates, draft, sync, run, publish, versions |
 | `snippet` | 22 | Customized snippet lifecycle: create, import, draft, sync, run, publish, versions |
-| `agent` | 16 | Agent config skills/files, drive files/skills, sandbox read/upload |
+| `agent` | 17 | Agent guide, config skills/files, drive files/skills, sandbox read/upload |
 | `explore` | 2 | Run and stop installed apps |
-| `auth` | 2 | Status, login, import cookies |
+| `archive` | 2 | List and download workflow run archives |
+| `auth` | 4 | Status, import cookies, console login, set tokens |
 
 ## Safety
 
 | Mechanism | How it works |
 |-----------|-------------|
-| **Confirm gates** | Destructive ops (`delete`, `publish`, `restore`, `set_credentials`) require `confirm=true` / `--yes`. Without it: exit code `4`. |
-| **Offline validation** | `sync_draft` validates the graph structure, variable refs, connectivity, and cycles *before* hitting the API. Errors abort with exit `5`. |
+| **Confirm gates** | Destructive ops (`delete`, `publish`, `restore`, `set_credentials`, plugin install, trigger create/enable, …) require `confirm=true` / `--yes`. Without it: exit code `4`. Graphs with code nodes also need confirm unless `DIFYWF_CODE_NODES=allow`. |
+| **Offline validation** | `sync_draft` validates the graph structure, variable refs, connectivity, and cycles *before* hitting the API. Errors abort with exit `5`. Stale hashes are `VALIDATION_FAILED` and retryable. Omitting env vars keeps current draft values. |
 | **Dry-run** | `--dry-run` on `sync_draft` returns a structural diff without saving. |
-| **Audit log** | Every mutation appends to `~/.difywf/audit.jsonl` (secrets redacted). |
+| **Audit log** | Every action appends to `~/.difywf/audit.jsonl` (nested secrets/graphs redacted, mode `0600`). |
 | **Auto-refresh** | Cookie sessions auto-refresh on 401 via the refresh-token cookie, with server-side rotation persisted. |
+| **HTTP MCP lock** | Streamable HTTP binds `127.0.0.1` by default. Non-loopback binds require `DIFYWF_MCP_TOKEN`. Host allowlist + 2MB body cap. |
+| **Secret store** | `~/.difywf/hosts.json` is `0600`. On macOS, cookies/tokens prefer the OS keychain unless `DIFYWF_HOME` is set. |
 
 **Error/exit codes:** `USAGE_ERROR(2)`, `AUTH_REQUIRED(3)`, `CONFIRM_REQUIRED(4)`,
 `VALIDATION_FAILED(5)`, `RBAC_DENIED(6)`, `NOT_FOUND(7)`, `DSL_VERSION_MISMATCH(8)`,
@@ -322,9 +337,9 @@ before retrying.
 ## Develop
 
 ```bash
+npm test            # 99 unit tests
 npm run typecheck   # tsc --noEmit
-npm test            # 49 unit tests
-npm run smoke:mcp   # MCP stdio smoke (143 tools, JSON-RPC handshake)
+npm run smoke:mcp   # MCP stdio smoke (153 tools, JSON-RPC handshake)
 npm run smoke:mcp:http   # MCP Streamable HTTP smoke (stateless POST /mcp)
 ```
 

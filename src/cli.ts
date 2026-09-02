@@ -8,7 +8,7 @@ import { resolveConfig, maskToken } from "./core/config.ts";
 import { consoleLogin, deviceLoginFlow, parseAuthCookiesFromInput, storeCookies, storeToken } from "./core/auth.ts";
 import { runTool, tools } from "./tools/registry.ts";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 const NS_ALIASES: Record<string, string> = {
   wf: "workflow",
@@ -26,14 +26,16 @@ const POSITIONALS: Record<string, string[]> = {
   "app.get": ["app_id"], "app.update": ["app_id"], "app.list_tags": ["app_id"], "app.ensure_tag": ["app_id", "tag"], "app.remove_tag": ["app_id", "tag"], "app.delete": ["app_id"], "app.export": ["app_id"],
   "workflow.get_draft": ["app_id"], "workflow.node_defaults": ["app_id", "node_type"], "workflow.sync_draft": ["app_id"],
   "workflow.run_draft": ["app_id"], "workflow.run": ["app_id"], "workflow.publish": ["app_id"],
-  "workflow.run_node": ["app_id", "node_id"], "workflow.events": ["app_id", "task_id"], "workflow.stop": ["app_id", "task_id"],
+  "workflow.run_node": ["app_id", "node_id"], "workflow.node_last_run": ["app_id", "node_id"], "workflow.events": ["app_id", "task_id"], "workflow.stop": ["app_id", "task_id"],
   "workflow.tool_get": ["app_id"], "workflow.tool_refresh_provider": ["app_id"], "workflow.tool_delete": ["workflow_tool_id"],
   "provider.models": ["provider"],
+  "plugin.get": ["plugin_unique_identifier"], "plugin.uninstall": ["plugin_installation_id"],
   "workflow.get_features": ["app_id"], "workflow.set_features": ["app_id"],
   "workflow.list_env_vars": ["app_id"], "workflow.list_conv_vars": ["app_id"],
   "workflow.create_variable": ["app_id"], "workflow.update_variable": ["app_id", "variable_id"], "workflow.delete_variable": ["app_id", "variable_id"],
   "workflow.list_versions": ["app_id"], "workflow.get_version": ["app_id", "workflow_id"], "workflow.restore": ["app_id", "workflow_id"], "workflow.delete_version": ["app_id", "workflow_id"],
   "app.copy": ["app_id"], "app.rename": ["app_id"], "app.set_icon": ["app_id"], "app.convert": ["app_id"], "app.check_deps": ["app_id"],
+  "app.chat": ["app_id"], "app.complete": ["app_id"],
   "trigger.list": ["app_id"], "trigger.create": ["app_id"], "trigger.enable": ["app_id"], "trigger.webhook": ["app_id"],
   "workflow.trigger_run": ["app_id"], "workflow.trigger_run_all": ["app_id"],
   "workspace.get": ["workspace_id"], "workspace.switch": ["workspace_id"], "workspace.members": ["workspace_id"],
@@ -68,7 +70,7 @@ const POSITIONALS: Record<string, string[]> = {
 };
 const CONTROL_FLAGS = new Set([
   "o", "output", "output-file", "help", "h", "version", "base-url", "workspace",
-  "openapi-token", "console-token",
+  "openapi-token", "console-token", "console-cookie",
 ]);
 
 export function parseFlags(argv: string[]): { positional: string[]; flags: Record<string, unknown> } {
@@ -131,7 +133,14 @@ export async function main(): Promise<void> {
   if (flags.help === true || flags.h === true || positional.length === 0) return printHelp(positional);
 
   if (positional[0] === "auth") return authMain(positional.slice(1), flags);
-  if (positional[0] === "mcp") { await import("./mcp.ts"); return; }
+  if (positional[0] === "mcp") {
+    const sub = positional[1];
+    if (sub !== undefined && sub !== "serve") {
+      return finish(err("USAGE_ERROR", `unknown mcp subcommand '${sub}'. Use: difywf mcp serve [--http]`), flags);
+    }
+    await import("./mcp.ts");
+    return;
+  }
 
   const ns = NS_ALIASES[positional[0]] ?? positional[0];
   const rest = positional.slice(1);
@@ -317,7 +326,11 @@ function finish(result: Result<unknown>, flags: Record<string, unknown>): void {
   if (outputFile) {
     const rendered = format === "yaml" ? toYaml(result) + "\n" : JSON.stringify(result) + "\n";
     fs.writeFileSync(outputFile, rendered, { encoding: "utf8" });
-    process.stdout.write(JSON.stringify({ ok: true, output_file: outputFile }) + "\n");
+    process.stdout.write(JSON.stringify({
+      ok: result.ok,
+      output_file: outputFile,
+      ...(result.ok ? {} : { error: result.error }),
+    }) + "\n");
     process.exit(result.ok ? EXIT.OK : EXIT[result.error.code]);
   }
   if (format === "yaml") {
@@ -344,9 +357,9 @@ function printHelp(positional: string[]): void {
     `difywf ${VERSION} — agent-agnostic Dify workflow authoring (CLI + MCP)`,
     "",
     "USAGE",
-    "  difywf <namespace> <verb> [flags]     e.g. difywf wf draft sync --graph graph.json --yes",
-    "  difywf auth <login|login-console|token|status>",
-    "  difywf mcp serve                       start the MCP server (stdio)",
+    "  difywf <namespace> <verb> [flags]     e.g. difywf wf draft sync --graph graph.json --dry-run",
+    "  difywf auth <login|login-console|token|import-cookies|status>",
+    "  difywf mcp serve                       start the MCP server (stdio; add --http for Streamable HTTP)",
     "",
     "COMMANDS",
     ...tools.map((t) => `  ${t.name.padEnd(28)} ${t.summary}`),
@@ -357,6 +370,7 @@ function printHelp(positional: string[]): void {
     "  --base-url <url>              Dify base URL (or DIFY_API_BASE)",
     "  --workspace <id>              workspace id (or DIFY_WORKSPACE_ID)",
     "  --openapi-token / --console-token   tokens (or DIFY_OPENAPI_TOKEN / DIFY_CONSOLE_TOKEN)",
+    "  --console-cookie <header|json>     console session cookies (or DIFY_CONSOLE_COOKIE)",
     "  --email / --password            console login (or DIFY_CONSOLE_EMAIL / DIFY_CONSOLE_PASSWORD)",
     "  --password-encoding <plain|base64>  login payload encoding (or DIFY_CONSOLE_PASSWORD_ENCODING)",
     "  --yes                         confirm destructive ops (maps to confirm=true)",

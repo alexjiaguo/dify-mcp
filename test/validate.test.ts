@@ -122,6 +122,19 @@ test("custom-note annotation nodes do not trigger false errors", () => {
   assert.deepEqual(codes(validateGraph(graph)), []);
 });
 
+test("http-request URLs targeting private hosts warn PRIVATE_URL", () => {
+  const graph: Graph = {
+    nodes: [
+      { id: "s", data: { type: "start", variables: [] } },
+      { id: "h", data: { type: "http-request", method: "GET", url: "http://127.0.0.1/secret" } },
+    ],
+    edges: [{ source: "s", target: "h" }],
+  };
+  const issues = validateGraph(graph);
+  assert.equal(codes(issues).length, 0);
+  assert.ok(issues.some((i) => i.code === "PRIVATE_URL" && i.level === "warning"));
+});
+
 test("all example templates in examples/ produce no error-level issues", () => {
   const examplesDir = path.join(dir, "..", "examples");
   const files = ["minimal-workflow.json", "llm-workflow.json", "rag-workflow.json"];

@@ -6,3 +6,7 @@ node_modules/
 !.env.example
 cookies.json
 *.cookie
+.DS_Store
+.handoff/
+.sessions/
+.remember/

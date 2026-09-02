@@ -83,7 +83,7 @@ test("ensureAppTag fails closed when bind readback is missing", async () => {
   const result = await client.ensureAppTag("app-1", "ndr-managed");
 
   assert.ok(!result.ok);
-  if (!result.ok) assert.equal(result.error.code, "DSL_VERSION_MISMATCH");
+  if (!result.ok) assert.equal(result.error.code, "SERVER_ERROR");
 });
 
 test("app.ensure_tag is confirm-gated", async () => {
@@ -136,7 +136,7 @@ test("removeAppTag fails closed when unbind readback still contains the tag", as
   const result = await client.removeAppTag("app-1", "workflow-beta-1.0");
 
   assert.ok(!result.ok);
-  if (!result.ok) assert.equal(result.error.code, "DSL_VERSION_MISMATCH");
+  if (!result.ok) assert.equal(result.error.code, "SERVER_ERROR");
 });
 
 test("app.remove_tag is confirm-gated", async () => {

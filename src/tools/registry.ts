@@ -3,15 +3,17 @@
 // prompt; they require confirm=true (CLI --yes) per call.
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { err, ok, type Err, type Result } from "../core/contract.ts";
-import { maskToken, resolveConfig, type Config, type Flags } from "../core/config.ts";
+import { maskToken, resolveConfig, storeWorkspace, type Config, type Flags } from "../core/config.ts";
 import { OpenapiClient } from "../api/openapi.ts";
 import { ConsoleClient } from "../api/console.ts";
-import { validateGraph, type Graph, type GraphEdge } from "../graph/validate.ts";
+import { graphHasCodeNodes, validateGraph, type Graph, type GraphEdge } from "../graph/validate.ts";
 import { guideText } from "./guide.ts";
-import { refreshConsoleCookies, storeCookies } from "../core/auth.ts";
+import { consoleLogin, parseAuthCookiesFromInput, refreshConsoleCookies, storeCookies, storeToken } from "../core/auth.ts";
+import { isPrivateUrl } from "../core/private-url.ts";
+import { redactArgs } from "../core/redact.ts";
+import { difywfHome } from "../core/paths.ts";
 
 export type ToolCtx = { cfg: Config; openapi: OpenapiClient | null; console: ConsoleClient | null };
 export type Tool = {
@@ -63,10 +65,73 @@ function needClient(ctx: ToolCtx, kind: "openapi" | "console"): OpenapiClient | 
     throw new ToolError("USAGE_ERROR", "no base URL; pass --base-url, set DIFY_API_BASE, or run `difywf auth login`");
   }
   if (!client) {
-    const envName = kind === "openapi" ? "DIFY_OPENAPI_TOKEN" : "DIFY_CONSOLE_TOKEN";
-    throw new ToolError("AUTH_REQUIRED", `no ${kind} token; set ${envName} or run \`difywf auth login[-console]\``);
+    throw new ToolError(
+      "AUTH_REQUIRED",
+      kind === "openapi"
+        ? "no OpenAPI token; set DIFY_OPENAPI_TOKEN or run `difywf auth login`"
+        : "no console session; import cookies (`difywf auth import-cookies` / auth.import_cookies), set DIFY_CONSOLE_COOKIE, or run `difywf auth login-console`",
+    );
   }
   return client;
+}
+
+function consoleFirst<T>(
+  ctx: ToolCtx,
+  consoleFn: (c: ConsoleClient) => Promise<Result<T>>,
+  openapiFn: (o: OpenapiClient) => Promise<Result<T>>,
+  missing = "this tool needs console cookies or an OpenAPI token",
+): Promise<Result<T>> {
+  if (ctx.console) return consoleFn(ctx.console);
+  if (ctx.openapi) return openapiFn(ctx.openapi);
+  throw new ToolError("AUTH_REQUIRED", missing);
+}
+
+function codeNodePolicy(): "allow" | "confirm" | "forbid" {
+  const v = (process.env.DIFYWF_CODE_NODES ?? "confirm").toLowerCase();
+  if (v === "allow" || v === "forbid") return v;
+  return "confirm";
+}
+
+function assertGraphPolicies(graph: Graph, args: Record<string, unknown>, dryRun: boolean): Result<unknown> | null {
+  if (dryRun) return null;
+  if (!graphHasCodeNodes(graph)) return null;
+  const policy = codeNodePolicy();
+  if (policy === "forbid") {
+    return err("VALIDATION_FAILED", "graph contains code nodes; DIFYWF_CODE_NODES=forbid");
+  }
+  if (policy === "confirm" && args.confirm !== true) {
+    return err(
+      "CONFIRM_REQUIRED",
+      "graph contains code nodes that execute server-side; pass confirm=true (or set DIFYWF_CODE_NODES=allow)",
+    );
+  }
+  return null;
+}
+
+function draftFields(data: unknown): {
+  graph?: Graph;
+  features?: unknown;
+  environment_variables?: unknown;
+  conversation_variables?: unknown;
+  hash?: string;
+} {
+  const d = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  return {
+    graph: d.graph && typeof d.graph === "object" ? (d.graph as Graph) : undefined,
+    features: d.features,
+    environment_variables: d.environment_variables,
+    conversation_variables: d.conversation_variables,
+    hash: typeof d.hash === "string" ? d.hash : undefined,
+  };
+}
+
+function assertPublicYamlUrl(url: string | undefined): void {
+  if (!url || !isPrivateUrl(url)) return;
+  if (process.env.DIFYWF_ALLOW_PRIVATE_URL === "1") return;
+  throw new ToolError(
+    "VALIDATION_FAILED",
+    "yaml_url targets a private/loopback host; set DIFYWF_ALLOW_PRIVATE_URL=1 to allow",
+  );
 }
 
 // Prefer the console (cookie-auth) surface; fall back to OpenAPI. Used by tools
@@ -104,6 +169,70 @@ export const tools: Tool[] = [
         console_token: maskToken(ctx.cfg.consoleToken),
         console_cookies: ctx.cfg.consoleCookies ? Object.keys(ctx.cfg.consoleCookies) : null,
       }),
+  },
+  {
+    name: "auth.import_cookies",
+    summary: "Store console session cookies (cookie-editor JSON or Cookie header). MCP equivalent of `difywf auth import-cookies`.",
+    schema: {
+      type: "object",
+      properties: { cookies: { description: "cookie-editor JSON, {cookies:[]}, Cookie header, or name/value object" }, base_url: S("Dify base URL if not already configured") },
+      required: ["cookies"],
+    },
+    run: async (args, ctx) => {
+      const base = str(args.base_url) ?? ctx.cfg.baseUrl;
+      if (!base) throw new ToolError("USAGE_ERROR", "no base URL; pass base_url or set DIFY_API_BASE");
+      const cookies = parseAuthCookiesFromInput(args.cookies);
+      if (!Object.keys(cookies).length) {
+        throw new ToolError("USAGE_ERROR", "no auth cookies found; expected access_token/console_token, csrf_token, refresh_token");
+      }
+      storeCookies(base, cookies);
+      return ok({ stored: true, base_url: base, cookies: Object.keys(cookies) });
+    },
+  },
+  {
+    name: "auth.login_console",
+    summary: "Email/password console login; stores rotated session cookies.",
+    schema: {
+      type: "object",
+      properties: {
+        email: S("console email"),
+        password: S("console password"),
+        password_encoding: { type: "string", enum: ["plain", "base64"] },
+        base_url: S("Dify base URL if not already configured"),
+      },
+      required: ["email", "password"],
+    },
+    run: async (args, ctx) => {
+      const base = str(args.base_url) ?? ctx.cfg.baseUrl;
+      if (!base) throw new ToolError("USAGE_ERROR", "no base URL; pass base_url or set DIFY_API_BASE");
+      const encoding = str(args.password_encoding) === "base64" ? "base64" : "plain";
+      const result = await consoleLogin(base, req(args, "email"), req(args, "password"), encoding);
+      if (!result.ok) return result;
+      storeCookies(base, result.data);
+      return ok({ stored: true, base_url: base, cookies: Object.keys(result.data) });
+    },
+  },
+  {
+    name: "auth.set_tokens",
+    summary: "Store an OpenAPI and/or console bearer token for this base URL.",
+    schema: {
+      type: "object",
+      properties: {
+        openapi_token: S("OpenAPI device/management token"),
+        console_token: S("console bearer token (legacy)"),
+        base_url: S("Dify base URL if not already configured"),
+      },
+    },
+    run: async (args, ctx) => {
+      const base = str(args.base_url) ?? ctx.cfg.baseUrl;
+      if (!base) throw new ToolError("USAGE_ERROR", "no base URL; pass base_url or set DIFY_API_BASE");
+      if (str(args.openapi_token)) storeToken(base, "openapi_token", str(args.openapi_token)!);
+      if (str(args.console_token)) storeToken(base, "console_token", str(args.console_token)!);
+      if (!str(args.openapi_token) && !str(args.console_token)) {
+        throw new ToolError("USAGE_ERROR", "pass openapi_token and/or console_token");
+      }
+      return ok({ stored: true, base_url: base });
+    },
   },
   {
     name: "app.list",
@@ -190,10 +319,19 @@ export const tools: Tool[] = [
   },
   {
     name: "app.export",
-    summary: "Export an app as DSL (YAML string).",
-    needs: "openapi",
-    schema: { type: "object", properties: { app_id: S("app uuid") }, required: ["app_id"] },
-    run: async (args, ctx) => (clientAny(ctx)).exportDsl(req(args, "app_id")),
+    summary: "Export an app as DSL (YAML string). include_secret defaults to false and requires confirm=true.",
+    schema: {
+      type: "object",
+      properties: { app_id: S("app uuid"), include_secret: B("include env-var secrets in the DSL"), confirm: CONFIRM },
+      required: ["app_id"],
+    },
+    run: async (args, ctx) => {
+      const includeSecret = args.include_secret === true;
+      if (includeSecret && args.confirm !== true) {
+        return err("CONFIRM_REQUIRED", "include_secret=true exports credentials; pass confirm=true to proceed");
+      }
+      return (clientAny(ctx)).exportDsl(req(args, "app_id"), includeSecret);
+    },
   },
   {
     name: "workflow.get_draft",
@@ -234,34 +372,40 @@ export const tools: Tool[] = [
   },
   {
     name: "workflow.sync_draft",
-    summary: "Validate and save the draft graph. Supports dry_run diff. Optimistic-concurrency via hash.",
+    summary: "Validate and save the draft graph. Supports dry_run diff. Optimistic-concurrency via hash. Omitting env/conversation variables keeps the current draft values (does not wipe them).",
     needs: "console",
     schema: {
       type: "object",
       properties: {
-        app_id: S("app uuid"), graph: O("{nodes, edges}"), features: O("app features"),
+        app_id: S("app uuid"), graph: O("{nodes, edges}"), graph_json: S("graph as a JSON string"),
+        features: O("app features"),
         environment_variables: { type: "array" }, conversation_variables: { type: "array" },
         hash: S("current draft hash; fetched automatically when omitted"),
         dry_run: B("validate + return diff without saving"),
+        confirm: CONFIRM,
       },
-      required: ["app_id", "graph"],
+      required: ["app_id"],
     },
     run: async (args, ctx) => {
       const client = needClient(ctx, "console") as ConsoleClient;
-      const graph = args.graph as Graph;
-      const issues = validateGraph(graph).filter((i) => i.level === "error");
-      if (issues.length > 0) return err("VALIDATION_FAILED", `${issues.length} error-level issue(s)`, { details: issues });
+      const graph = parseGraphArg(args);
+      const issues = validateGraph(graph);
+      const errors = issues.filter((i) => i.level === "error");
+      if (errors.length > 0) return err("VALIDATION_FAILED", `${errors.length} error-level issue(s)`, { details: issues });
+      const dryRun = args.dry_run === true;
+      const policy = assertGraphPolicies(graph, args, dryRun);
+      if (policy) return policy;
       const current = await client.getDraft(req(args, "app_id"));
-      const currentGraph = current.ok ? ((current.data as Record<string, unknown>).graph as Graph | undefined) : undefined;
-      if (args.dry_run === true) {
-        return ok({ dry_run: true, diff: currentGraph ? graphDiff(currentGraph, graph) : null, issues });
+      const fields = current.ok ? draftFields(current.data) : {};
+      if (dryRun) {
+        return ok({ dry_run: true, diff: fields.graph ? graphDiff(fields.graph, graph) : null, issues });
       }
       const body: Record<string, unknown> = {
         graph,
-        features: args.features ?? (current.ok ? (current.data as Record<string, unknown>).features : {}) ?? {},
-        environment_variables: args.environment_variables ?? [],
-        conversation_variables: args.conversation_variables ?? [],
-        hash: str(args.hash) ?? (current.ok ? (current.data as Record<string, unknown>).hash : undefined),
+        features: args.features ?? fields.features ?? {},
+        environment_variables: args.environment_variables ?? fields.environment_variables ?? [],
+        conversation_variables: args.conversation_variables ?? fields.conversation_variables ?? [],
+        hash: str(args.hash) ?? fields.hash,
       };
       return client.syncDraft(req(args, "app_id"), body);
     },
@@ -275,17 +419,24 @@ export const tools: Tool[] = [
   },
   {
     name: "workflow.run",
-    summary: "Run the published app with inputs; returns the SSE event list.",
-    needs: "openapi",
+    summary: "Run the published app with inputs; returns the SSE event list. Console cookies first; OpenAPI token fallback.",
     schema: { type: "object", properties: { app_id: S("app uuid"), inputs: O("input variables") }, required: ["app_id", "inputs"] },
-    run: async (args, ctx) => (needClient(ctx, "openapi") as OpenapiClient).runApp(req(args, "app_id"), obj(args, "inputs")),
+    run: async (args, ctx) =>
+      consoleFirst(
+        ctx,
+        (c) => c.runPublished(req(args, "app_id"), obj(args, "inputs")),
+        (o) => o.runApp(req(args, "app_id"), obj(args, "inputs")),
+      ),
   },
   {
     name: "workflow.events",
-    summary: "Fetch the task event stream for a run.",
-    needs: "openapi",
-    schema: { type: "object", properties: { app_id: S("app uuid"), task_id: S("task id") }, required: ["app_id", "task_id"] },
-    run: async (args, ctx) => (needClient(ctx, "openapi") as OpenapiClient).taskEvents(req(args, "app_id"), req(args, "task_id")),
+    summary: "Fetch the task event stream for a run. OpenAPI SSE when a token is present; cookie-only sessions fall back to the console run record.",
+    schema: { type: "object", properties: { app_id: S("app uuid"), task_id: S("task or run id") }, required: ["app_id", "task_id"] },
+    run: async (args, ctx) => {
+      if (ctx.openapi) return ctx.openapi.taskEvents(req(args, "app_id"), req(args, "task_id"));
+      if (ctx.console) return ctx.console.getRun(req(args, "app_id"), req(args, "task_id"));
+      throw new ToolError("AUTH_REQUIRED", "workflow.events needs an OpenAPI token or console cookies");
+    },
   },
   {
     name: "workflow.run_node",
@@ -297,10 +448,22 @@ export const tools: Tool[] = [
   },
   {
     name: "workflow.stop",
-    summary: "Stop a running task.",
-    needs: "openapi",
+    summary: "Stop a running task. Console cookies first; OpenAPI token fallback.",
     schema: { type: "object", properties: { app_id: S("app uuid"), task_id: S("task id") }, required: ["app_id", "task_id"] },
-    run: async (args, ctx) => (needClient(ctx, "openapi") as OpenapiClient).stopTask(req(args, "app_id"), req(args, "task_id")),
+    run: async (args, ctx) =>
+      consoleFirst(
+        ctx,
+        (c) => c.stopTask(req(args, "app_id"), req(args, "task_id")),
+        (o) => o.stopTask(req(args, "app_id"), req(args, "task_id")),
+      ),
+  },
+  {
+    name: "workflow.node_last_run",
+    summary: "Get the last draft run result for one node (debugging).",
+    needs: "console",
+    schema: { type: "object", properties: { app_id: S("app uuid"), node_id: S("node id") }, required: ["app_id", "node_id"] },
+    run: async (args, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).nodeLastRun(req(args, "app_id"), req(args, "node_id")),
   },
   {
     name: "workflow.publish",
@@ -383,6 +546,50 @@ export const tools: Tool[] = [
     schema: { type: "object", properties: {} },
     run: async (_args, ctx) => (needClient(ctx, "console") as ConsoleClient).listPlugins(),
   },
+  {
+    name: "plugin.get",
+    summary: "Fetch a plugin manifest by unique identifier.",
+    needs: "console",
+    schema: { type: "object", properties: { plugin_unique_identifier: S("plugin unique identifier") }, required: ["plugin_unique_identifier"] },
+    run: async (args, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).getPlugin(req(args, "plugin_unique_identifier")),
+  },
+  {
+    name: "plugin.install",
+    summary: "Install plugins from the marketplace (or pkg). Requires confirm=true.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: {
+        identifiers: { type: "array", items: { type: "string" }, description: "plugin_unique_identifiers" },
+        source: { type: "string", enum: ["marketplace", "pkg"] },
+        confirm: CONFIRM,
+      },
+      required: ["identifiers", "confirm"],
+    },
+    run: async (args, ctx) => {
+      const ids = Array.isArray(args.identifiers)
+        ? args.identifiers.filter((x): x is string => typeof x === "string" && x.length > 0)
+        : [];
+      if (!ids.length) throw new ToolError("USAGE_ERROR", "pass identifiers[]");
+      const source = str(args.source) === "pkg" ? "pkg" : "marketplace";
+      return (needClient(ctx, "console") as ConsoleClient).installPlugins(ids, source);
+    },
+  },
+  {
+    name: "plugin.uninstall",
+    summary: "Uninstall a plugin by installation id. Destructive; requires confirm=true.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: { plugin_installation_id: S("plugin installation uuid"), confirm: CONFIRM },
+      required: ["plugin_installation_id", "confirm"],
+    },
+    run: async (args, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).uninstallPlugin(req(args, "plugin_installation_id")),
+  },
   // ============ P1: features, variables, versions ============
   {
     name: "workflow.get_features",
@@ -393,9 +600,10 @@ export const tools: Tool[] = [
   },
   {
     name: "workflow.set_features",
-    summary: "Replace the draft workflow features object.",
+    summary: "Replace the draft workflow features object. Requires confirm=true.",
     needs: "console",
-    schema: { type: "object", properties: { app_id: S("app uuid"), features: O("features object") }, required: ["app_id", "features"] },
+    confirm: true,
+    schema: { type: "object", properties: { app_id: S("app uuid"), features: O("features object"), confirm: CONFIRM }, required: ["app_id", "features", "confirm"] },
     run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).setFeatures(req(a, "app_id"), obj(a, "features")),
   },
   {
@@ -414,9 +622,10 @@ export const tools: Tool[] = [
   },
   {
     name: "workflow.create_variable",
-    summary: "Create a draft environment/conversation variable.",
+    summary: "Create a draft environment/conversation variable. Requires confirm=true.",
     needs: "console",
-    schema: { type: "object", properties: { app_id: S("app uuid"), variable: O("variable definition {name, value_type, value, description}"), variable_type: S("env or conversation (default: env)") }, required: ["app_id", "variable"] },
+    confirm: true,
+    schema: { type: "object", properties: { app_id: S("app uuid"), variable: O("variable definition {name, value_type, value, description}"), variable_type: S("env or conversation (default: env)"), confirm: CONFIRM }, required: ["app_id", "variable", "confirm"] },
     run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).createVariable(req(a, "app_id"), obj(a, "variable"), str(a.variable_type)),
   },
   {
@@ -467,9 +676,10 @@ export const tools: Tool[] = [
   // ============ P1: app metadata + import ============
   {
     name: "app.copy",
-    summary: "Duplicate an app.",
+    summary: "Duplicate an app. Requires confirm=true.",
     needs: "console",
-    schema: { type: "object", properties: { app_id: S("app uuid") }, required: ["app_id"] },
+    confirm: true,
+    schema: { type: "object", properties: { app_id: S("app uuid"), confirm: CONFIRM }, required: ["app_id", "confirm"] },
     run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).copyApp(req(a, "app_id")),
   },
   {
@@ -488,9 +698,10 @@ export const tools: Tool[] = [
   },
   {
     name: "app.convert",
-    summary: "Convert an app to workflow mode.",
+    summary: "Convert an app to workflow mode. Requires confirm=true.",
     needs: "console",
-    schema: { type: "object", properties: { app_id: S("app uuid"), name: S(""), icon: S(""), icon_type: S(""), icon_background: S("") }, required: ["app_id"] },
+    confirm: true,
+    schema: { type: "object", properties: { app_id: S("app uuid"), name: S(""), icon: S(""), icon_type: S(""), icon_background: S(""), confirm: CONFIRM }, required: ["app_id", "confirm"] },
     run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).convertApp(req(a, "app_id"), pick(a, ["name", "icon", "icon_type", "icon_background"])),
   },
   {
@@ -503,6 +714,7 @@ export const tools: Tool[] = [
       if (str(a.yaml)) { body.mode = "yaml-content"; body.yaml_content = str(a.yaml); }
       else if (str(a.yaml_url)) { body.mode = "yaml-url"; body.yaml_url = str(a.yaml_url); }
       else throw new ToolError("USAGE_ERROR", "pass yaml (content) or yaml_url");
+      assertPublicYamlUrl(str(a.yaml_url));
       if (str(a.name)) body.name = str(a.name);
       if (str(a.description)) body.description = str(a.description);
       const consoleClient = ctx.console;
@@ -535,10 +747,54 @@ export const tools: Tool[] = [
   },
   {
     name: "app.check_deps",
-    summary: "Check plugin dependencies for an app being imported.",
-    needs: "openapi",
+    summary: "Check plugin dependencies for an app being imported. Console cookies first; OpenAPI token fallback.",
     schema: { type: "object", properties: { app_id: S("app uuid") }, required: ["app_id"] },
-    run: async (a, ctx) => (needClient(ctx, "openapi") as OpenapiClient).checkDependencies(req(a, "app_id")),
+    run: async (a, ctx) =>
+      consoleFirst(
+        ctx,
+        (c) => c.checkDependencies(req(a, "app_id")),
+        (o) => o.checkDependencies(req(a, "app_id")),
+      ),
+  },
+  {
+    name: "app.chat",
+    summary: "Send a chat/agent message (SSE). Console cookies.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        app_id: S("app uuid"),
+        query: S("user message"),
+        inputs: O("input variables"),
+        conversation_id: S("existing conversation id"),
+        files: { type: "array" },
+      },
+      required: ["app_id", "query"],
+    },
+    run: async (a, ctx) => {
+      const body: Record<string, unknown> = {
+        query: req(a, "query"),
+        inputs: a.inputs && typeof a.inputs === "object" ? a.inputs : {},
+      };
+      if (str(a.conversation_id)) body.conversation_id = str(a.conversation_id);
+      if (Array.isArray(a.files)) body.files = a.files;
+      return (needClient(ctx, "console") as ConsoleClient).chatMessages(req(a, "app_id"), body);
+    },
+  },
+  {
+    name: "app.complete",
+    summary: "Run a completion-mode app (SSE). Console cookies.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: { app_id: S("app uuid"), inputs: O("input variables"), query: S("optional query text") },
+      required: ["app_id", "inputs"],
+    },
+    run: async (a, ctx) => {
+      const body: Record<string, unknown> = { inputs: obj(a, "inputs") };
+      if (str(a.query)) body.query = str(a.query);
+      return (needClient(ctx, "console") as ConsoleClient).completionMessages(req(a, "app_id"), body);
+    },
   },
   // ============ P1: triggers ============
   {
@@ -550,16 +806,18 @@ export const tools: Tool[] = [
   },
   {
     name: "trigger.create",
-    summary: "Create a trigger (schedule/webhook) for an app.",
+    summary: "Create a trigger (schedule/webhook) for an app. Requires confirm=true.",
     needs: "console",
-    schema: { type: "object", properties: { app_id: S("app uuid"), trigger: O("trigger definition") }, required: ["app_id", "trigger"] },
+    confirm: true,
+    schema: { type: "object", properties: { app_id: S("app uuid"), trigger: O("trigger definition"), confirm: CONFIRM }, required: ["app_id", "trigger", "confirm"] },
     run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).createTrigger(req(a, "app_id"), obj(a, "trigger")),
   },
   {
     name: "trigger.enable",
-    summary: "Enable or disable triggers for an app.",
+    summary: "Enable or disable triggers for an app. Requires confirm=true.",
     needs: "console",
-    schema: { type: "object", properties: { app_id: S("app uuid"), enabled: B("true to enable") }, required: ["app_id", "enabled"] },
+    confirm: true,
+    schema: { type: "object", properties: { app_id: S("app uuid"), enabled: B("true to enable"), confirm: CONFIRM }, required: ["app_id", "enabled", "confirm"] },
     run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).enableTrigger(req(a, "app_id"), { enabled: a.enabled === true }),
   },
   {
@@ -593,31 +851,51 @@ export const tools: Tool[] = [
   },
   {
     name: "workspace.get",
-    summary: "Describe one workspace.",
-    needs: "openapi",
-    schema: { type: "object", properties: { workspace_id: S("workspace id") }, required: ["workspace_id"] },
-    run: async (a, ctx) => (needClient(ctx, "openapi") as OpenapiClient).getWorkspace(req(a, "workspace_id")),
+    summary: "Describe one workspace (or the current workspace when workspace_id is omitted on console).",
+    schema: { type: "object", properties: { workspace_id: S("workspace id") } },
+    run: async (a, ctx) => {
+      if (ctx.console) return ctx.console.getWorkspace(str(a.workspace_id));
+      if (ctx.openapi) return ctx.openapi.getWorkspace(req(a, "workspace_id"));
+      throw new ToolError("AUTH_REQUIRED", "workspace.get needs console cookies or an OpenAPI token");
+    },
   },
   {
     name: "workspace.switch",
-    summary: "Switch the active workspace.",
-    needs: "openapi",
+    summary: "Switch the active workspace and persist workspace_id in the local store.",
     schema: { type: "object", properties: { workspace_id: S("workspace id") }, required: ["workspace_id"] },
-    run: async (a, ctx) => (needClient(ctx, "openapi") as OpenapiClient).switchWorkspace(req(a, "workspace_id")),
+    run: async (a, ctx) => {
+      const id = req(a, "workspace_id");
+      const result = await consoleFirst(
+        ctx,
+        (c) => c.switchWorkspace(id),
+        (o) => o.switchWorkspace(id),
+      );
+      if (result.ok && ctx.cfg.baseUrl) storeWorkspace(ctx.cfg.baseUrl, id);
+      return result;
+    },
   },
   {
     name: "workspace.members",
     summary: "List workspace members.",
-    needs: "openapi",
-    schema: { type: "object", properties: { workspace_id: S("workspace id") }, required: ["workspace_id"] },
-    run: async (a, ctx) => (needClient(ctx, "openapi") as OpenapiClient).listMembers(req(a, "workspace_id")),
+    schema: { type: "object", properties: { workspace_id: S("workspace id") } },
+    run: async (a, ctx) => {
+      if (ctx.console) return ctx.console.listMembers(str(a.workspace_id));
+      if (ctx.openapi) return ctx.openapi.listMembers(req(a, "workspace_id"));
+      throw new ToolError("AUTH_REQUIRED", "workspace.members needs console cookies or an OpenAPI token");
+    },
   },
   {
     name: "file.upload",
-    summary: "Upload a file for use in runs.",
-    needs: "openapi",
-    schema: { type: "object", properties: { app_id: S("app uuid"), file: O("file metadata/transfer payload") }, required: ["app_id", "file"] },
-    run: async (a, ctx) => (needClient(ctx, "openapi") as OpenapiClient).uploadFile(req(a, "app_id"), obj(a, "file")),
+    summary: "Upload a file. Console uses POST /files/upload (app_id optional). OpenAPI requires app_id. Pass {name, content_b64, mime?} for multipart.",
+    schema: { type: "object", properties: { app_id: S("app uuid (required for OpenAPI)"), file: O("file metadata or {name, content_b64, mime?}") }, required: ["file"] },
+    run: async (a, ctx) => {
+      if (ctx.console) return ctx.console.uploadFile(obj(a, "file"));
+      if (ctx.openapi) {
+        if (!str(a.app_id)) throw new ToolError("USAGE_ERROR", "app_id is required for OpenAPI file.upload");
+        return ctx.openapi.uploadFile(str(a.app_id)!, obj(a, "file"));
+      }
+      throw new ToolError("AUTH_REQUIRED", "file.upload needs console cookies or an OpenAPI token");
+    },
   },
   {
     name: "workflow.hitl_preview",
@@ -897,10 +1175,34 @@ export const tools: Tool[] = [
   },
   {
     name: "rag.sync_draft",
-    summary: "Save a RAG pipeline's draft graph. Pass graph, features, hash.",
+    summary: "Validate and save a RAG pipeline's draft graph. Pass graph or graph_json.",
     needs: "console",
-    schema: { type: "object", properties: { pipeline_id: S("pipeline id"), graph: O("{nodes, edges}"), features: O("features"), hash: S("current draft hash") }, required: ["pipeline_id", "graph"] },
-    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).syncRagDraft(req(a, "pipeline_id"), pick(a, ["graph", "features", "hash"])),
+    schema: {
+      type: "object",
+      properties: {
+        pipeline_id: S("pipeline id"), graph: O("{nodes, edges}"), graph_json: S("graph as a JSON string"),
+        features: O("features"), hash: S("current draft hash"), dry_run: B("validate + return diff without saving"), confirm: CONFIRM,
+      },
+      required: ["pipeline_id"],
+    },
+    run: async (a, ctx) => {
+      const client = needClient(ctx, "console") as ConsoleClient;
+      const graph = parseGraphArg(a);
+      const issues = validateGraph(graph);
+      const errors = issues.filter((i) => i.level === "error");
+      if (errors.length > 0) return err("VALIDATION_FAILED", `${errors.length} error-level issue(s)`, { details: issues });
+      const dryRun = a.dry_run === true;
+      const policy = assertGraphPolicies(graph, a, dryRun);
+      if (policy) return policy;
+      const current = await client.getRagDraft(req(a, "pipeline_id"));
+      const fields = current.ok ? draftFields(current.data) : {};
+      if (dryRun) return ok({ dry_run: true, diff: fields.graph ? graphDiff(fields.graph, graph) : null, issues });
+      return client.syncRagDraft(req(a, "pipeline_id"), {
+        graph,
+        features: a.features ?? fields.features ?? {},
+        hash: str(a.hash) ?? fields.hash,
+      });
+    },
   },
   {
     name: "rag.node_defaults",
@@ -1038,6 +1340,7 @@ export const tools: Tool[] = [
       if (str(a.yaml)) { body.mode = "yaml-content"; body.yaml_content = str(a.yaml); }
       else if (str(a.yaml_url)) { body.mode = "yaml-url"; body.yaml_url = str(a.yaml_url); }
       else throw new ToolError("USAGE_ERROR", "pass yaml (content) or yaml_url");
+      assertPublicYamlUrl(str(a.yaml_url));
       if (str(a.name)) body.name = str(a.name);
       const imp = await c.importSnippet(body);
       if (!imp.ok) return imp;
@@ -1053,9 +1356,10 @@ export const tools: Tool[] = [
   },
   {
     name: "snippet.import_confirm",
-    summary: "Confirm a snippet import explicitly by import_id.",
+    summary: "Confirm a snippet import explicitly by import_id. Requires confirm=true.",
     needs: "console",
-    schema: { type: "object", properties: { import_id: S("import id") }, required: ["import_id"] },
+    confirm: true,
+    schema: { type: "object", properties: { import_id: S("import id"), confirm: CONFIRM }, required: ["import_id", "confirm"] },
     run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).confirmSnippetImport(req(a, "import_id")),
   },
   {
@@ -1074,10 +1378,34 @@ export const tools: Tool[] = [
   },
   {
     name: "snippet.sync_draft",
-    summary: "Save a snippet's draft graph. Pass graph, features, hash.",
+    summary: "Validate and save a snippet's draft graph. Pass graph or graph_json.",
     needs: "console",
-    schema: { type: "object", properties: { snippet_id: S("snippet id"), graph: O("{nodes, edges}"), features: O("features"), hash: S("current draft hash") }, required: ["snippet_id", "graph"] },
-    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).syncSnippetDraft(req(a, "snippet_id"), pick(a, ["graph", "features", "hash"])),
+    schema: {
+      type: "object",
+      properties: {
+        snippet_id: S("snippet id"), graph: O("{nodes, edges}"), graph_json: S("graph as a JSON string"),
+        features: O("features"), hash: S("current draft hash"), dry_run: B("validate + return diff without saving"), confirm: CONFIRM,
+      },
+      required: ["snippet_id"],
+    },
+    run: async (a, ctx) => {
+      const client = needClient(ctx, "console") as ConsoleClient;
+      const graph = parseGraphArg(a);
+      const issues = validateGraph(graph);
+      const errors = issues.filter((i) => i.level === "error");
+      if (errors.length > 0) return err("VALIDATION_FAILED", `${errors.length} error-level issue(s)`, { details: issues });
+      const dryRun = a.dry_run === true;
+      const policy = assertGraphPolicies(graph, a, dryRun);
+      if (policy) return policy;
+      const current = await client.getSnippetDraft(req(a, "snippet_id"));
+      const fields = current.ok ? draftFields(current.data) : {};
+      if (dryRun) return ok({ dry_run: true, diff: fields.graph ? graphDiff(fields.graph, graph) : null, issues });
+      return client.syncSnippetDraft(req(a, "snippet_id"), {
+        graph,
+        features: a.features ?? fields.features ?? {},
+        hash: str(a.hash) ?? fields.hash,
+      });
+    },
   },
   {
     name: "snippet.node_defaults",
@@ -1298,29 +1626,35 @@ export async function runTool(tool: Tool, args: Record<string, unknown>, flags: 
 
 function audit(surface: string, tool: string, args: Record<string, unknown>, result: Result<unknown>): void {
   try {
-    const dir = path.join(os.homedir(), ".difywf");
-    fs.mkdirSync(dir, { recursive: true });
-    const entry = { ts: new Date().toISOString(), surface, tool, ok: result.ok, code: result.ok ? null : result.error.code, args: redact(args) };
-    fs.appendFileSync(path.join(dir, "audit.jsonl"), JSON.stringify(entry) + "\n");
+    const dir = difywfHome();
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = path.join(dir, "audit.jsonl");
+    if (!fs.existsSync(file)) fs.writeFileSync(file, "", { mode: 0o600 });
+    const entry = {
+      ts: new Date().toISOString(),
+      surface,
+      tool,
+      ok: result.ok,
+      code: result.ok ? null : result.error.code,
+      args: redactArgs(args),
+    };
+    fs.appendFileSync(file, JSON.stringify(entry) + "\n", { mode: 0o600 });
+    try {
+      fs.chmodSync(file, 0o600);
+    } catch {
+      // ignore platforms that cannot chmod
+    }
   } catch {
     // never break a tool call because audit logging failed
   }
 }
 
-function redact(args: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(args)) {
-    out[k] = /token|secret|credential|password|api[-_]?key/i.test(k) ? "[redacted]" : v;
-  }
-  return out;
-}
-
 function graphDiff(a: Graph, b: Graph): unknown {
-  const an = new Map(a.nodes.map((n) => [n.id, n]));
-  const bn = new Map(b.nodes.map((n) => [n.id, n]));
+  const an = new Map((a.nodes ?? []).map((n) => [n.id, n]));
+  const bn = new Map((b.nodes ?? []).map((n) => [n.id, n]));
   const edgeKey = (e: GraphEdge) => `${e.source}->${e.target}:${e.sourceHandle ?? ""}`;
-  const ae = new Set(a.edges.map(edgeKey));
-  const be = new Set(b.edges.map(edgeKey));
+  const ae = new Set((a.edges ?? []).map(edgeKey));
+  const be = new Set((b.edges ?? []).map(edgeKey));
   return {
     nodes: {
       added: [...bn.keys()].filter((id) => !an.has(id)),

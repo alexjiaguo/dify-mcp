@@ -15,9 +15,10 @@ Thanks for your interest in dify-mcp! This is a community project - contribution
 git clone https://github.com/alexjiaguo/dify-mcp.git
 cd dify-mcp
 npm install
-npm test              # 49 unit tests
+npm test              # 99 unit tests
 npm run typecheck     # tsc --noEmit
 npm run smoke:mcp     # MCP stdio smoke
+npm run smoke:mcp:http
 ```
 
 No build step. Source runs directly on Node 23.6+ native TypeScript.

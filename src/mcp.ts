@@ -13,6 +13,13 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { err } from "./core/contract.ts";
+import {
+  bindRequiresToken,
+  extractMcpToken,
+  hostHeaderAllowed,
+  maxBodyBytes,
+  mcpTokenMatches,
+} from "./core/mcp-guard.ts";
 import { runTool, tools } from "./tools/registry.ts";
 import { guideText } from "./tools/guide.ts";
 
@@ -24,7 +31,7 @@ const mcpName = (n: string): string => n.replaceAll(".", "_");
 // a single instance for the process lifetime.
 function createMcpServer(): Server {
   const server = new Server(
-    { name: "difywf", version: "0.1.0" },
+    { name: "difywf", version: "0.2.0" },
     { capabilities: { tools: {}, resources: {} } },
   );
 
@@ -53,9 +60,14 @@ function createMcpServer(): Server {
     ],
   }));
 
-  server.setRequestHandler(ReadResourceRequestSchema, async (req) => ({
-    contents: [{ uri: req.params.uri, mimeType: "text/markdown", text: guideText("all") }],
-  }));
+  server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
+    if (req.params.uri !== "difywf://guide") {
+      throw new Error(`unknown resource '${req.params.uri}'`);
+    }
+    return {
+      contents: [{ uri: "difywf://guide", mimeType: "text/markdown", text: guideText("all") }],
+    };
+  });
 
   return server;
 }
@@ -70,18 +82,22 @@ const transportMode = (
 ).toLowerCase();
 
 if (transportMode === "http") {
-  startHttpServer(
-    Number(argValue("--port") ?? process.env.DIFYWF_MCP_PORT ?? 3000),
-    argValue("--host") ?? process.env.DIFYWF_MCP_HOST ?? "0.0.0.0",
-  );
+  const host = argValue("--host") ?? process.env.DIFYWF_MCP_HOST ?? "127.0.0.1";
+  const mcpToken = process.env.DIFYWF_MCP_TOKEN;
+  const refuse = bindRequiresToken(host, mcpToken);
+  if (refuse) {
+    process.stderr.write(`difywf: ${refuse}\n`);
+    process.exit(2);
+  }
+  startHttpServer(Number(argValue("--port") ?? process.env.DIFYWF_MCP_PORT ?? 3000), host, mcpToken);
 } else {
   await createMcpServer().connect(new StdioServerTransport());
 }
 
 // --- Streamable HTTP transport (stateless, one server per request) ---
-function startHttpServer(port: number, host: string): void {
+function startHttpServer(port: number, host: string, mcpToken: string | undefined): void {
   const httpServer = createServer((req, res) => {
-    handleHttpRequest(req, res).catch((e) => {
+    handleHttpRequest(req, res, host, mcpToken).catch((e) => {
       if (!res.headersSent) {
         res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: String(e) }, id: null }));
@@ -96,7 +112,12 @@ function startHttpServer(port: number, host: string): void {
   process.on("SIGTERM", shutdown);
 }
 
-async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleHttpRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  bindHost: string,
+  mcpToken: string | undefined,
+): Promise<void> {
   const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
   if (req.method === "GET" && pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
@@ -106,13 +127,24 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
   if (pathname !== "/mcp") {
     return writeJsonRpcError(res, 404, -32000, "Not found. MCP endpoint is POST /mcp.");
   }
+  if (!hostHeaderAllowed(req.headers.host, bindHost, Boolean(mcpToken))) {
+    return writeJsonRpcError(res, 403, -32000, "Forbidden host.");
+  }
+  if (!mcpTokenMatches(extractMcpToken(req.headers), mcpToken)) {
+    res.writeHead(401, { "content-type": "application/json", "www-authenticate": "Bearer" });
+    res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" }, id: null }));
+    return;
+  }
   if (req.method !== "POST") {
     return writeJsonRpcError(res, 405, -32000, "Method not allowed. POST a JSON-RPC message to /mcp.");
   }
   let parsedBody: unknown;
   try {
     parsedBody = await readBody(req);
-  } catch {
+  } catch (e) {
+    if (e instanceof Error && e.message === "payload too large") {
+      return writeJsonRpcError(res, 413, -32000, "Request body exceeds DIFYWF_MCP_MAX_BODY_BYTES.");
+    }
     return writeJsonRpcError(res, 400, -32700, "Parse error: request body is not valid JSON.");
   }
   // Stateless: no session id. Each POST is a self-contained JSON-RPC message,
@@ -135,8 +167,14 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
 }
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
+  const max = maxBodyBytes();
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+  let n = 0;
+  for await (const chunk of req) {
+    n += (chunk as Buffer).length;
+    if (n > max) throw new Error("payload too large");
+    chunks.push(chunk as Buffer);
+  }
   const raw = Buffer.concat(chunks).toString("utf8").trim();
   return raw ? JSON.parse(raw) : undefined;
 }

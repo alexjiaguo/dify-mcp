@@ -4,6 +4,7 @@
 
 import { apiCall, readSse, type RequestOpts } from "../core/http.ts";
 import { ok, err, type Result } from "../core/contract.ts";
+import { isFilePayload, toFormData } from "../core/multipart.ts";
 
 export class ConsoleClient {
   base: string;
@@ -35,12 +36,23 @@ export class ConsoleClient {
 
   private async call<T = unknown>(path: string, opts: RequestOpts = {}): Promise<Result<T>> {
     let res = await apiCall<T>(`${this.base}/console/api`, path, this.authOpts(opts));
-    // Auto-refresh the console session once on expiry using the refresh_token cookie.
     if (!res.ok && res.error.code === "AUTH_EXPIRED" && this.cookies && this.onRefresh) {
       const refreshed = await this.onRefresh(this.cookies);
       if (refreshed) {
         this.cookies = refreshed;
         res = await apiCall<T>(`${this.base}/console/api`, path, this.authOpts(opts));
+      }
+    }
+    return res;
+  }
+
+  private async stream(path: string, opts: RequestOpts = {}): Promise<Result<unknown[]>> {
+    let res = await readSse(`${this.base}/console/api`, path, this.authOpts(opts));
+    if (!res.ok && res.error.code === "AUTH_EXPIRED" && this.cookies && this.onRefresh) {
+      const refreshed = await this.onRefresh(this.cookies);
+      if (refreshed) {
+        this.cookies = refreshed;
+        res = await readSse(`${this.base}/console/api`, path, this.authOpts(opts));
       }
     }
     return res;
@@ -53,8 +65,10 @@ export class ConsoleClient {
   getApp(appId: string): Promise<Result<unknown>> {
     return this.call(`apps/${appId}`);
   }
-  async exportDsl(appId: string): Promise<Result<string>> {
-    const r = await this.call<{ data: string }>(`apps/${appId}/export`);
+  async exportDsl(appId: string, includeSecret = false): Promise<Result<string>> {
+    const r = await this.call<{ data: string }>(`apps/${appId}/export`, {
+      query: { include_secret: includeSecret ? "true" : "false" },
+    });
     return r.ok ? ok(r.data.data) : r;
   }
   importDsl(payload: Record<string, unknown>): Promise<Result<unknown>> {
@@ -114,7 +128,7 @@ export class ConsoleClient {
 
     const listed = await this.listAppTags();
     if (!listed.ok) return listed;
-    const rows = Array.isArray(listed.data) ? listed.data : [];
+    const rows = asList(listed.data);
     let tagId: string | undefined;
     for (const item of rows) {
       if (!item || typeof item !== "object") continue;
@@ -136,7 +150,7 @@ export class ConsoleClient {
     if (!after.ok) return after;
     const readback = after.data.tags.find((tag) => tag.name === tagName);
     if (!readback) {
-      return err("DSL_VERSION_MISMATCH", `app tag ${tagName} is missing after bind readback`, {
+      return err("SERVER_ERROR", `app tag ${tagName} is missing after bind readback`, {
         details: { app_id: appId, tag_id: tagId, after: after.data.tags },
       });
     }
@@ -159,7 +173,7 @@ export class ConsoleClient {
     if (!tagId) {
       const listed = await this.listAppTags();
       if (!listed.ok) return listed;
-      const rows = Array.isArray(listed.data) ? listed.data : [];
+      const rows = asList(listed.data);
       for (const item of rows) {
         if (!item || typeof item !== "object") continue;
         const value = item as Record<string, unknown>;
@@ -173,7 +187,7 @@ export class ConsoleClient {
     const after = await this.getAppTags(appId);
     if (!after.ok) return after;
     if (after.data.tags.some((tag) => tag.name === tagName)) {
-      return err("DSL_VERSION_MISMATCH", `app tag ${tagName} remains after unbind readback`, {
+      return err("SERVER_ERROR", `app tag ${tagName} remains after unbind readback`, {
         details: { app_id: appId, tag_id: tagId, after: after.data.tags },
       });
     }
@@ -188,6 +202,22 @@ export class ConsoleClient {
   // --- workspaces ---
   listWorkspaces(): Promise<Result<unknown>> {
     return this.call("workspaces");
+  }
+  getWorkspace(workspaceId?: string): Promise<Result<unknown>> {
+    return this.call(workspaceId ? `workspaces/${workspaceId}` : "workspaces/current");
+  }
+  switchWorkspace(workspaceId: string): Promise<Result<unknown>> {
+    return this.call("workspaces/switch", { body: { tenant_id: workspaceId } });
+  }
+  listMembers(workspaceId?: string): Promise<Result<unknown>> {
+    return this.call(workspaceId ? `workspaces/${workspaceId}/members` : "workspaces/current/members");
+  }
+  checkDependencies(appId: string): Promise<Result<unknown>> {
+    return this.call(`apps/${appId}/dependencies`, { method: "POST" });
+  }
+  uploadFile(file: Record<string, unknown>): Promise<Result<unknown>> {
+    const body = isFilePayload(file) ? toFormData(file) : file;
+    return this.call("files/upload", { body });
   }
 
   // --- workflow authoring ---
@@ -262,7 +292,7 @@ export class ConsoleClient {
     const after = await this.getWorkflowTool({ appId });
     if (!after.ok) return after;
     if (after.data.synced !== true) {
-      return err("DSL_VERSION_MISMATCH", `workflow tool provider for app ${appId} is still out of sync`, {
+      return err("SERVER_ERROR", `workflow tool provider for app ${appId} is still out of sync`, {
         details: { action, before: existing ?? null, after: after.data },
       });
     }
@@ -271,7 +301,22 @@ export class ConsoleClient {
 
   // --- testing ---
   runDraft(appId: string, inputs: Record<string, unknown>): Promise<Result<unknown[]>> {
-    return readSse(`${this.base}/console/api`, `apps/${appId}/workflows/draft/run`, this.authOpts({ body: { inputs } }));
+    return this.stream(`apps/${appId}/workflows/draft/run`, { body: { inputs } });
+  }
+  runPublished(appId: string, inputs: Record<string, unknown>): Promise<Result<unknown[]>> {
+    return this.stream(`apps/${appId}/workflows/run`, { body: { inputs } });
+  }
+  stopTask(appId: string, taskId: string): Promise<Result<unknown>> {
+    return this.call(`apps/${appId}/workflow-runs/tasks/${taskId}/stop`, { method: "POST" });
+  }
+  nodeLastRun(appId: string, nodeId: string): Promise<Result<unknown>> {
+    return this.call(`apps/${appId}/workflows/draft/nodes/${nodeId}/last-run`);
+  }
+  chatMessages(appId: string, body: Record<string, unknown>): Promise<Result<unknown[]>> {
+    return this.stream(`apps/${appId}/chat-messages`, { body });
+  }
+  completionMessages(appId: string, body: Record<string, unknown>): Promise<Result<unknown[]>> {
+    return this.stream(`apps/${appId}/completion-messages`, { body });
   }
   runNode(
     appId: string,
@@ -301,6 +346,23 @@ export class ConsoleClient {
   listPlugins(): Promise<Result<unknown>> {
     return this.call("workspaces/current/plugin/list");
   }
+  getPlugin(pluginUniqueIdentifier: string): Promise<Result<unknown>> {
+    return this.call("workspaces/current/plugin/fetch-manifest", {
+      query: { plugin_unique_identifier: pluginUniqueIdentifier },
+    });
+  }
+  installPlugins(identifiers: string[], source: "marketplace" | "pkg" = "marketplace"): Promise<Result<unknown>> {
+    const path =
+      source === "pkg"
+        ? "workspaces/current/plugin/install/pkg"
+        : "workspaces/current/plugin/install/marketplace";
+    return this.call(path, { body: { plugin_unique_identifiers: identifiers } });
+  }
+  uninstallPlugin(pluginInstallationId: string): Promise<Result<unknown>> {
+    return this.call("workspaces/current/plugin/uninstall", {
+      body: { plugin_installation_id: pluginInstallationId },
+    });
+  }
 
   // --- features & variables ---
   async getFeatures(appId: string): Promise<Result<unknown>> {
@@ -322,9 +384,9 @@ export class ConsoleClient {
     const isConv = variableType === "conversation";
     const endpoint = isConv ? "conversation-variables" : "environment-variables";
     const listKey = isConv ? "conversation_variables" : "environment_variables";
-    const current = await this.call<{ items: Record<string, unknown>[] }>(`apps/${appId}/workflows/draft/${endpoint}`);
+    const current = await this.call(`apps/${appId}/workflows/draft/${endpoint}`);
     if (!current.ok) return current;
-    const items = current.data.items ?? [];
+    const items = asList(current.data) as Record<string, unknown>[];
     return this.call(`apps/${appId}/workflows/draft/${endpoint}`, { body: { [listKey]: [...items, body] } });
   }
   updateVariable(appId: string, variableId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
@@ -447,7 +509,9 @@ export class ConsoleClient {
 
   // --- audio ---
   audioToText(appId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
-    return this.call(`apps/${appId}/audio-to-text`, { body });
+    return this.call(`apps/${appId}/audio-to-text`, {
+      body: isFilePayload(body) ? toFormData(body) : body,
+    });
   }
   textToAudio(appId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
     return this.call(`apps/${appId}/text-to-audio`, { body });
@@ -498,7 +562,9 @@ export class ConsoleClient {
     return this.call(`apps/${appId}/annotations/export`);
   }
   batchImportAnnotations(appId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
-    return this.call(`apps/${appId}/annotations/batch-import`, { body });
+    return this.call(`apps/${appId}/annotations/batch-import`, {
+      body: isFilePayload(body) ? toFormData(body) : body,
+    });
   }
   annotationImportStatus(appId: string, jobId: string): Promise<Result<unknown>> {
     return this.call(`apps/${appId}/annotations/batch-import-status/${jobId}`);
@@ -633,7 +699,9 @@ export class ConsoleClient {
     return this.call(`apps/${appId}/agent/config/skills`);
   }
   agentConfigSkillUpload(appId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
-    return this.call(`apps/${appId}/agent/config/skills/upload`, { body });
+    return this.call(`apps/${appId}/agent/config/skills/upload`, {
+      body: isFilePayload(body) ? toFormData(body) : body,
+    });
   }
   agentConfigSkillInspect(appId: string, name: string): Promise<Result<unknown>> {
     return this.call(`apps/${appId}/agent/config/skills/${name}/inspect`);
@@ -645,7 +713,9 @@ export class ConsoleClient {
     return this.call(`apps/${appId}/agent/config/files`);
   }
   agentConfigFileUpload(appId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
-    return this.call(`apps/${appId}/agent/config/files`, { body });
+    return this.call(`apps/${appId}/agent/config/files`, {
+      body: isFilePayload(body) ? toFormData(body) : body,
+    });
   }
   agentDriveFiles(appId: string): Promise<Result<unknown>> {
     return this.call(`apps/${appId}/agent/drive/files`);
@@ -672,7 +742,9 @@ export class ConsoleClient {
     return this.call(`agent/${agentId}/sandbox/files/read`, { query: params as Record<string, string | number | boolean | undefined> });
   }
   agentSandboxUpload(agentId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
-    return this.call(`agent/${agentId}/sandbox/files/upload`, { body });
+    return this.call(`agent/${agentId}/sandbox/files/upload`, {
+      body: isFilePayload(body) ? toFormData(body) : body,
+    });
   }
 }
 
@@ -758,6 +830,16 @@ function safeWorkflowToolName(label: string): string {
   let name = label.replace(/[^A-Za-z0-9_]+/g, "_").replace(/_{3,}/g, "_").replace(/^_+|_+$/g, "");
   if (!name) name = "workflow_tool";
   return /^\d/.test(name) ? `tool_${name}` : name;
+}
+
+function asList(data: unknown): unknown[] {
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === "object") {
+    const value = data as Record<string, unknown>;
+    if (Array.isArray(value.data)) return value.data;
+    if (Array.isArray(value.items)) return value.items;
+  }
+  return [];
 }
 
 function nonEmptyString(value: unknown): string | undefined {

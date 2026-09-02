@@ -160,7 +160,7 @@ test("refresh fails closed when readback remains stale", async () => {
   const result = await client.refreshWorkflowToolProvider("app-1");
 
   assert.ok(!result.ok);
-  if (!result.ok) assert.equal(result.error.code, "DSL_VERSION_MISMATCH");
+  if (!result.ok) assert.equal(result.error.code, "SERVER_ERROR");
 });
 
 test("workflow.tool_refresh_provider is confirm-gated", async () => {

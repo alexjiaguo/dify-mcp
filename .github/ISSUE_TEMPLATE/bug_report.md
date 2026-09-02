@@ -22,4 +22,4 @@ difywf ...
 - Dify edition: <!-- cloud.dify.ai / self-hosted version X.Y -->
 - Auth method: <!-- cookie import / email+password / OpenAPI token -->
 - Node version: <!-- node --version -->
-- dify-mcp version: <!-- v0.1.0 -->
+- dify-mcp version: <!-- v0.2.0 -->

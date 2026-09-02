@@ -215,7 +215,7 @@ test("extractAuthCookies keeps only auth cookies, drops analytics/consent", () =
   assert.deepEqual(Object.keys(auth).sort(), ["__Host-access_token", "__Host-csrf_token", "__Host-refresh_token"]);
 });
 
-test("parseAuthCookiesFromInput handles both JSON array and Cookie header inputs", () => {
+test("parseAuthCookiesFromInput handles JSON array, Cookie header, and object wrapper", () => {
   const json = JSON.stringify([
     { name: "AMP_x", value: "a" },
     { name: "__Host-access_token", value: "acc" },
@@ -228,4 +228,12 @@ test("parseAuthCookiesFromInput handles both JSON array and Cookie header inputs
   const header = "AMP_x=a; __Host-access_token=acc; __Host-csrf_token=csrf; __Host-refresh_token=ref";
   const fromHeader = parseAuthCookiesFromInput(header);
   assert.deepEqual(Object.keys(fromHeader).sort(), ["__Host-access_token", "__Host-csrf_token", "__Host-refresh_token"]);
+
+  const fromObject = parseAuthCookiesFromInput({
+    cookies: [
+      { name: "__Host-access_token", value: "acc" },
+      { name: "__Host-csrf_token", value: "csrf" },
+    ],
+  });
+  assert.equal(fromObject["__Host-access_token"], "acc");
 });

@@ -11,10 +11,10 @@ const fakeCtx = (overrides: Partial<ToolCtx> = {}): ToolCtx => ({
   ...overrides,
 });
 
-test("registry has 144 tools, all names unique", () => {
+test("registry tool names are unique and stay above the authoring surface floor", () => {
   const names = tools.map((t) => t.name);
-  assert.equal(names.length, 144);
-  assert.equal(new Set(names).size, 144);
+  assert.ok(names.length >= 150, `expected >=150 tools, got ${names.length}`);
+  assert.equal(new Set(names).size, names.length);
 });
 
 test("every tool name is ns.verb and maps to an MCP-safe name", () => {
@@ -96,20 +96,24 @@ test("snippet.import rejects when neither yaml nor yaml_url is given", async () 
   if (!r.ok) assert.equal(r.error.code, "USAGE_ERROR");
 });
 
-test("rag.sync_draft forwards graph/features/hash to the client", async () => {
+test("rag.sync_draft validates the graph and preserves current features/hash", async () => {
+  const graph = { nodes: [{ id: "s", data: { type: "start", variables: [] } }], edges: [] };
   let captured: Record<string, unknown> = {};
   const fake = {
+    getRagDraft: async (): Promise<Result<unknown>> => ({ ok: true, data: { graph, features: { x: 1 }, hash: "h1" } }),
     syncRagDraft: async (_p: string, body: Record<string, unknown>): Promise<Result<unknown>> => {
       captured = body;
       return { ok: true, data: { hash: "h2" } };
     },
   };
   const r = await find("rag.sync_draft").run(
-    { pipeline_id: "p1", graph: { nodes: [], edges: [] }, features: { x: 1 }, hash: "h1" },
+    { pipeline_id: "p1", graph },
     fakeCtx({ console: fake as never }),
   );
   assert.ok(r.ok);
-  assert.deepEqual(captured, { graph: { nodes: [], edges: [] }, features: { x: 1 }, hash: "h1" });
+  assert.deepEqual(captured.graph, graph);
+  assert.deepEqual(captured.features, { x: 1 });
+  assert.equal(captured.hash, "h1");
 });
 
 test("agent.sandbox_upload forwards the file payload", async () => {

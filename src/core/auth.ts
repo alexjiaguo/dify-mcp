@@ -7,6 +7,16 @@
 import { err, ok, type Result } from "./contract.ts";
 import { apiCall, fetchCapturingCookies } from "./http.ts";
 import { loadHosts, saveHosts } from "./config.ts";
+import { csrfValue } from "./cookies.ts";
+
+export {
+  csrfValue,
+  extractAuthCookies,
+  isAuthCookie,
+  parseAuthCookiesFromInput,
+  parseCookieJson,
+  parseCookieString,
+} from "./cookies.ts";
 
 const CLIENT_ID = "difywf";
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
@@ -112,69 +122,6 @@ export async function refreshConsoleCookies(
   });
   if (!r.ok) return r;
   return ok({ ...cookies, ...r.data.cookies });
-}
-
-// Parse a raw "k=v; k2=v2" Cookie header string. Pairs are separated by ';' ONLY -
-// values may contain commas (e.g. the cookieyes-consent cookie), so splitting on ','
-// corrupts them. This was the bug that caused a garbage AMP cookie to get stored.
-export function parseCookieString(raw: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const part of raw.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq <= 0) continue;
-    const k = part.slice(0, eq).trim();
-    const v = part.slice(eq + 1).trim();
-    if (k) out[k] = v;
-  }
-  return out;
-}
-
-// Parse a browser cookie-export JSON array ([{name, value, ...}, ...]) into a map.
-// This is the format produced by cookie-editor / EditThisCookie extensions, so a user
-// can export ALL cookies and difywf picks out the auth ones (see extractAuthCookies).
-export function parseCookieJson(jsonText: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  let arr: unknown;
-  try {
-    arr = JSON.parse(jsonText);
-  } catch {
-    return out;
-  }
-  if (!Array.isArray(arr)) return out;
-  for (const item of arr) {
-    if (!item || typeof item !== "object") continue;
-    const name = (item as Record<string, unknown>).name;
-    const value = (item as Record<string, unknown>).value;
-    if (typeof name === "string" && typeof value === "string") out[name] = value;
-  }
-  return out;
-}
-
-// Match Dify console auth cookies by name, tolerating __Host- / __Secure- prefixes.
-const AUTH_COOKIE_RE = /(?:^|[-_])(access_token|console_token|csrf_token|refresh_token)$/i;
-export function isAuthCookie(name: string): boolean {
-  return AUTH_COOKIE_RE.test(name);
-}
-export function extractAuthCookies(cookies: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(cookies)) {
-    if (isAuthCookie(k)) out[k] = v;
-  }
-  return out;
-}
-
-// Detect input format (JSON array vs raw Cookie header), parse, keep only auth cookies.
-export function parseAuthCookiesFromInput(text: string): Record<string, string> {
-  const trimmed = text.trim();
-  const all = trimmed.startsWith("[") || trimmed.startsWith("{")
-    ? parseCookieJson(trimmed)
-    : parseCookieString(trimmed);
-  return extractAuthCookies(all);
-}
-
-export function csrfValue(cookies: Record<string, string>): string | undefined {
-  const key = Object.keys(cookies).find((k) => /csrf/i.test(k));
-  return key ? cookies[key] : undefined;
 }
 
 export function storeCookies(baseUrl: string, cookies: Record<string, string>): void {
