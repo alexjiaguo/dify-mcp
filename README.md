@@ -8,6 +8,8 @@
 Dify workflows autonomously — everything a human can do in the UI, now scriptable.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/alexjiaguo/dify-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/alexjiaguo/dify-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/alexjiaguo/dify-mcp)](https://github.com/alexjiaguo/dify-mcp/releases/latest)
 [![Node >= 23.6](https://img.shields.io/badge/node-%E2%89%A523.6-green.svg)](https://nodejs.org)
 [![153 Tools](https://img.shields.io/badge/tools-153-purple.svg)](#tools)
 [![Live Verified](https://img.shields.io/badge/live--verified-cloud.dify.ai-brightgreen.svg)](#live-verified)
@@ -84,15 +86,38 @@ Don't see your agent? If it supports MCP or can run shell commands, it works. Th
 - **Cookie auth, handled.** Dify's console uses cookie + CSRF double-submit, not
   Bearer tokens. dify-mcp captures, stores (keychain on macOS, else `0600` file),
   and auto-refreshes the session — including server-side refresh-token rotation.
-  MCP hosts can call `auth.import_cookies` / `auth.login_console` without the CLI.
-  `DIFY_CONSOLE_COOKIE` and `--console-cookie` work for non-interactive bootstrap.
+  That same session now covers draft *and* published run/stop, file upload,
+  dependency checks, and workspace switch. MCP hosts can call `auth.import_cookies`
+  / `auth.login_console` without the CLI. `DIFY_CONSOLE_COOKIE` and
+  `--console-cookie` work for non-interactive bootstrap.
 
 - **Safe by default.** Destructive operations require explicit `confirm=true` /
-  `--yes`. Graphs are validated offline before sync. Every mutation is audit-logged.
-  `--dry-run` shows diffs without saving.
+  `--yes`. Graphs are validated offline before sync (iteration/loop sub-graphs,
+  sticky notes, and modern multi-case if-else included). Every mutation is
+  audit-logged. `--dry-run` shows diffs without saving.
 
 - **Zero build step.** Runs directly on Node 23.6+ native TypeScript. No compiler,
   no bundler, no transpiler. Clone, install, go.
+
+## What's new in [v0.2.0](https://github.com/alexjiaguo/dify-mcp/releases/tag/v0.2.0)
+
+- **Cookie-complete authoring.** Run, stop, upload, check deps, and switch
+  workspaces with the same console session. MCP hosts authenticate without dropping
+  to the CLI.
+- **Safer HTTP MCP.** Binds `127.0.0.1` by default. Binding `0.0.0.0` (Docker)
+  requires `DIFYWF_MCP_TOKEN`. Host allowlist + 2MB body cap; `/health` stays open
+  for probes.
+- **Workflow-as-tool providers.** Get, refresh, or delete the published-tool
+  binding after you ship a version (`workflow.tool_get` /
+  `workflow.tool_refresh_provider` / `workflow.tool_delete`).
+- **Verified app tags.** `app.ensure_tag` / `app.remove_tag` bind or unbind an
+  exact tag name and read it back. Confirm-gated.
+- **Smarter graph validation.** Iteration/loop inner nodes, canvas `custom-note`
+  stickies, and modern `cases[]` if-else branches no longer fail offline checks.
+- **Large payloads.** `--yaml @file` for DSLs that exceed OS argument limits;
+  `--output-file` keeps big results off size-limited stdout.
+- **Starter graphs.** Ready-made templates in [`examples/`](examples/)
+  (echo, LLM, RAG). `sync_draft` no longer wipes omitted env/conversation secrets.
 
 ## Live verified
 
@@ -103,6 +128,7 @@ Every tool category has been tested against **cloud.dify.ai** with real credenti
   snippets, RAG, agents, stats, comments, annotations, audio, files, runs, workspace,
   archive, explore, auth
 - ✅ MCP transport: `tools/call` over stdio and Streamable HTTP with live cookie auth
+- ✅ Example templates in `examples/` validate clean (echo, LLM, RAG)
 - ✅ Unit tests · typecheck clean · MCP smoke (153 tools)
 
 ## Quickstart
@@ -152,14 +178,19 @@ difywf app list                             # see your apps
 difywf app create --mode workflow --name "my-agent-workflow"
 
 difywf wf node defaults <app-id> llm        # get the schema for an LLM node
-difywf wf validate --graph graph.json       # offline: structure, refs, cycles
-difywf wf draft sync <app-id> --graph graph.json --dry-run   # preview diff
-difywf wf draft sync <app-id> --graph graph.json             # save draft
+difywf wf validate --graph examples/llm-workflow.json        # offline: structure, refs, cycles
+difywf wf draft sync <app-id> --graph examples/llm-workflow.json --dry-run
+difywf wf draft sync <app-id> --graph examples/llm-workflow.json
 difywf wf test <app-id> --input query="hello"                # test-run the draft
 difywf app import --yaml @workflow.yml --yes                  # file channel for large DSLs
+difywf app ensure-tag <app-id> production --yes               # bind + verify exact tag name
 difywf wf publish <app-id> --yes                             # ship it
 difywf workflow tool refresh-provider <app-id> --yes        # rebind workflow-as-tool to the published version
 ```
+
+Starter graphs live in [`examples/`](examples/): `minimal-workflow.json` (echo),
+`llm-workflow.json` (start → LLM → answer), `rag-workflow.json` (knowledge
+retrieval). All three pass `difywf wf validate` with no error-level issues.
 
 ### Connect your agent (MCP)
 
@@ -298,8 +329,8 @@ putting cookies or tokens in the image.
 
 | Namespace | Tools | What it does |
 |-----------|-------|-------------|
-| `app` | 17 | List, create, update, tag, untag, delete, export, import, copy, rename, convert, chat, complete |
-| `workflow` | 29 | Get/sync drafts, validate, run, publish, workflow-tool providers, node last-run, variables, versions, HITL |
+| `app` | 17 | List, create, update, verified tags, delete, export, import (console cookies or OpenAPI; `--yaml @file`), copy, rename, convert, chat, complete |
+| `workflow` | 29 | Get/sync drafts, validate (incl. iteration/loop sub-graphs), run, publish, workflow-as-tool providers, node last-run, variables, versions, HITL, features, triggers |
 | `provider` | 3 | List providers, list models, set credentials |
 | `plugin` | 4 | List, get, install, uninstall plugins |
 | `trigger` | 4 | Create, enable, list, webhook triggers; run triggers |
@@ -321,11 +352,12 @@ putting cookies or tokens in the image.
 
 | Mechanism | How it works |
 |-----------|-------------|
-| **Confirm gates** | Destructive ops (`delete`, `publish`, `restore`, `set_credentials`, plugin install, trigger create/enable, …) require `confirm=true` / `--yes`. Without it: exit code `4`. Graphs with code nodes also need confirm unless `DIFYWF_CODE_NODES=allow`. |
-| **Offline validation** | `sync_draft` validates the graph structure, variable refs, connectivity, and cycles *before* hitting the API. Errors abort with exit `5`. Stale hashes are `VALIDATION_FAILED` and retryable. Omitting env vars keeps current draft values. |
+| **Confirm gates** | Destructive ops (`delete`, `publish`, `restore`, `set_credentials`, plugin install, trigger create/enable, tag bind/unbind, workflow-tool refresh/delete, …) require `confirm=true` / `--yes`. Without it: exit code `4`. Graphs with code nodes also need confirm unless `DIFYWF_CODE_NODES=allow`. |
+| **Offline validation** | `sync_draft` validates structure, variable refs, connectivity, and cycles *before* hitting the API — including iteration/loop inner nodes, `custom-note` stickies, and modern multi-case if-else. Errors abort with exit `5`. Stale hashes are `VALIDATION_FAILED` and retryable. Omitting env vars keeps current draft values. |
 | **Dry-run** | `--dry-run` on `sync_draft` returns a structural diff without saving. |
+| **Private URLs** | `http-request` nodes targeting private/loopback hosts warn (`PRIVATE_URL`). `yaml_url` imports to private hosts are rejected unless `DIFYWF_ALLOW_PRIVATE_URL=1`. |
 | **Audit log** | Every action appends to `~/.difywf/audit.jsonl` (nested secrets/graphs redacted, mode `0600`). |
-| **Auto-refresh** | Cookie sessions auto-refresh on 401 via the refresh-token cookie, with server-side rotation persisted. |
+| **Auto-refresh** | Cookie sessions auto-refresh on 401 via the refresh-token cookie, with server-side rotation persisted. Console cookies cover run/stop/upload/deps/workspace; OpenAPI is fallback. |
 | **HTTP MCP lock** | Streamable HTTP binds `127.0.0.1` by default. Non-loopback binds require `DIFYWF_MCP_TOKEN`. Host allowlist + 2MB body cap. |
 | **Secret store** | `~/.difywf/hosts.json` is `0600`. On macOS, cookies/tokens prefer the OS keychain unless `DIFYWF_HOME` is set. |
 
@@ -333,6 +365,21 @@ putting cookies or tokens in the image.
 `VALIDATION_FAILED(5)`, `RBAC_DENIED(6)`, `NOT_FOUND(7)`, `DSL_VERSION_MISMATCH(8)`,
 `RATE_LIMITED(9)`, `SERVER_ERROR(10)`, `NETWORK_ERROR(11)`. Check `error.retryable`
 before retrying.
+
+## Environment
+
+See [`.env.example`](.env.example). Common knobs:
+
+| Variable | Purpose |
+|----------|---------|
+| `DIFY_API_BASE` | Dify instance URL (default `https://cloud.dify.ai`) |
+| `DIFY_CONSOLE_COOKIE` | Cookie header or cookie-editor JSON for non-interactive bootstrap |
+| `DIFY_CONSOLE_EMAIL` / `DIFY_CONSOLE_PASSWORD` | Headless `auth login-console` |
+| `DIFY_CONSOLE_PASSWORD_ENCODING` | `plain` (default) or `base64` for legacy login payloads |
+| `DIFYWF_HOME` | Config + audit directory (default `~/.difywf`) |
+| `DIFYWF_MCP_TRANSPORT` / `DIFYWF_MCP_HOST` / `DIFYWF_MCP_PORT` / `DIFYWF_MCP_TOKEN` | Streamable HTTP MCP |
+| `DIFYWF_CODE_NODES` | `confirm` (default), `allow`, or `forbid` |
+| `DIFYWF_ALLOW_PRIVATE_URL` | Set `1` to allow `yaml_url` imports to private hosts |
 
 ## Develop
 
@@ -343,7 +390,10 @@ npm run smoke:mcp   # MCP stdio smoke (153 tools, JSON-RPC handshake)
 npm run smoke:mcp:http   # MCP Streamable HTTP smoke (stateless POST /mcp)
 ```
 
-No build step. Source runs directly via Node's type stripping.
+No build step. Source runs directly via Node's type stripping. GitHub Actions
+runs typecheck, unit tests, and both MCP smokes on every push to `main`.
+
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
