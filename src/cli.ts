@@ -8,7 +8,7 @@ import { resolveConfig, maskToken } from "./core/config.ts";
 import { consoleLogin, deviceLoginFlow, parseAuthCookiesFromInput, storeCookies, storeToken } from "./core/auth.ts";
 import { runTool, tools } from "./tools/registry.ts";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 const NS_ALIASES: Record<string, string> = {
   wf: "workflow",
@@ -39,6 +39,7 @@ const POSITIONALS: Record<string, string[]> = {
   "trigger.list": ["app_id"], "trigger.create": ["app_id"], "trigger.enable": ["app_id"], "trigger.webhook": ["app_id"],
   "workflow.trigger_run": ["app_id"], "workflow.trigger_run_all": ["app_id"],
   "workspace.get": ["workspace_id"], "workspace.switch": ["workspace_id"], "workspace.members": ["workspace_id"],
+  "workspace.invite_members": ["role"], "workspace.update_member_role": ["member_id", "role"], "workspace.remove_member": ["member_id"],
   "file.upload": ["app_id"],
   "workflow.hitl_preview": ["app_id", "node_id"], "workflow.hitl_submit": ["app_id", "node_id"],
   "runs.list": ["app_id"], "runs.get": ["app_id", "run_id"], "runs.node_executions": ["app_id", "run_id"], "runs.export": ["app_id", "run_id"],
@@ -54,6 +55,14 @@ const POSITIONALS: Record<string, string[]> = {
   "rag.run_draft": ["pipeline_id"], "rag.run_published": ["pipeline_id"], "rag.run_node": ["pipeline_id", "node_id"], "rag.stop": ["pipeline_id", "task_id"],
   "rag.publish": ["pipeline_id"], "rag.list_versions": ["pipeline_id"], "rag.get_version": ["pipeline_id", "workflow_id"],
   "rag.update_version": ["pipeline_id", "workflow_id"], "rag.restore": ["pipeline_id", "workflow_id"], "rag.delete_version": ["pipeline_id", "workflow_id"],
+  "knowledge.list_datasets": [], "knowledge.create_dataset": ["name"], "knowledge.get_dataset": ["dataset_id"],
+  "knowledge.update_dataset": ["dataset_id"], "knowledge.delete_dataset": ["dataset_id"],
+  "knowledge.list_documents": ["dataset_id"], "knowledge.get_document": ["dataset_id", "document_id"],
+  "knowledge.create_document": ["dataset_id"], "knowledge.delete_document": ["dataset_id", "document_id"],
+  "knowledge.rename_document": ["dataset_id", "document_id", "name"], "knowledge.indexing_status": ["dataset_id"],
+  "knowledge.hit_testing": ["dataset_id"], "knowledge.list_segments": ["dataset_id", "document_id"],
+  "knowledge.add_segment": ["dataset_id", "document_id"], "knowledge.update_segment": ["dataset_id", "document_id", "segment_id"],
+  "knowledge.delete_segments": ["dataset_id", "document_id"],
   "snippet.get": ["snippet_id"], "snippet.update": ["snippet_id"], "snippet.delete": ["snippet_id"], "snippet.export": ["snippet_id"],
   "snippet.import_confirm": ["import_id"], "snippet.check_deps": ["snippet_id"],
   "snippet.get_draft": ["snippet_id"], "snippet.sync_draft": ["snippet_id"], "snippet.node_defaults": ["snippet_id"], "snippet.publish": ["snippet_id"],

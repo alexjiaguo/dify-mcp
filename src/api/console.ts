@@ -11,16 +11,19 @@ export class ConsoleClient {
   token?: string;
   cookies?: Record<string, string>;
   onRefresh?: (cookies: Record<string, string>) => Promise<Record<string, string> | null>;
+  onEvent?: (event: unknown, index: number) => void | Promise<void>;
   constructor(
     base: string,
     token?: string,
     cookies?: Record<string, string>,
     onRefresh?: (cookies: Record<string, string>) => Promise<Record<string, string> | null>,
+    onEvent?: (event: unknown, index: number) => void | Promise<void>,
   ) {
     this.base = base;
     this.token = token;
     this.cookies = cookies;
     this.onRefresh = onRefresh;
+    this.onEvent = onEvent;
   }
 
   // Cookie-auth (current Dify console) takes precedence; Bearer is the fallback
@@ -47,12 +50,16 @@ export class ConsoleClient {
   }
 
   private async stream(path: string, opts: RequestOpts = {}): Promise<Result<unknown[]>> {
-    let res = await readSse(`${this.base}/console/api`, path, this.authOpts(opts));
+    const withProgress: RequestOpts = {
+      ...opts,
+      onEvent: opts.onEvent ?? this.onEvent,
+    };
+    let res = await readSse(`${this.base}/console/api`, path, this.authOpts(withProgress));
     if (!res.ok && res.error.code === "AUTH_EXPIRED" && this.cookies && this.onRefresh) {
       const refreshed = await this.onRefresh(this.cookies);
       if (refreshed) {
         this.cookies = refreshed;
-        res = await readSse(`${this.base}/console/api`, path, this.authOpts(opts));
+        res = await readSse(`${this.base}/console/api`, path, this.authOpts(withProgress));
       }
     }
     return res;
@@ -211,6 +218,18 @@ export class ConsoleClient {
   }
   listMembers(workspaceId?: string): Promise<Result<unknown>> {
     return this.call(workspaceId ? `workspaces/${workspaceId}/members` : "workspaces/current/members");
+  }
+  inviteMembers(body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call("workspaces/current/members/invite-email", { body });
+  }
+  updateMemberRole(memberId: string, role: string): Promise<Result<unknown>> {
+    return this.call(`workspaces/current/members/${memberId}/update-role`, {
+      method: "PUT",
+      body: { role },
+    });
+  }
+  removeMember(memberId: string): Promise<Result<unknown>> {
+    return this.call(`workspaces/current/members/${memberId}`, { method: "DELETE" });
   }
   checkDependencies(appId: string): Promise<Result<unknown>> {
     return this.call(`apps/${appId}/dependencies`, { method: "POST" });
@@ -527,6 +546,77 @@ export class ConsoleClient {
   }
   listRagTemplates(): Promise<Result<unknown>> {
     return this.call(`rag/pipeline/templates`);
+  }
+
+  // --- classic knowledge base (datasets / documents / segments) ---
+  createDataset(body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call("datasets", { body });
+  }
+  getDataset(datasetId: string): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}`);
+  }
+  updateDataset(datasetId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}`, { method: "PATCH", body });
+  }
+  deleteDataset(datasetId: string): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}`, { method: "DELETE" });
+  }
+  listDocuments(
+    datasetId: string,
+    q?: { page?: number; limit?: number; keyword?: string; status?: string },
+  ): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}/documents`, {
+      query: { page: q?.page, limit: q?.limit, keyword: q?.keyword, status: q?.status },
+    });
+  }
+  getDocument(datasetId: string, documentId: string): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}/documents/${documentId}`);
+  }
+  createDocument(datasetId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}/documents`, { body });
+  }
+  deleteDocument(datasetId: string, documentId: string): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}/documents/${documentId}`, { method: "DELETE" });
+  }
+  renameDocument(datasetId: string, documentId: string, name: string): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}/documents/${documentId}/rename`, { body: { name } });
+  }
+  documentIndexingStatus(datasetId: string, documentId: string): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}/documents/${documentId}/indexing-status`);
+  }
+  datasetIndexingStatus(datasetId: string): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}/indexing-status`);
+  }
+  hitTesting(datasetId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}/hit-testing`, { body });
+  }
+  listSegments(
+    datasetId: string,
+    documentId: string,
+    q?: { page?: number; limit?: number; keyword?: string; enabled?: string },
+  ): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}/documents/${documentId}/segments`, {
+      query: { page: q?.page, limit: q?.limit, keyword: q?.keyword, enabled: q?.enabled },
+    });
+  }
+  addSegment(datasetId: string, documentId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}/documents/${documentId}/segment`, { body });
+  }
+  updateSegment(
+    datasetId: string,
+    documentId: string,
+    segmentId: string,
+    body: Record<string, unknown>,
+  ): Promise<Result<unknown>> {
+    return this.call(`datasets/${datasetId}/documents/${documentId}/segments/${segmentId}`, {
+      method: "PATCH",
+      body,
+    });
+  }
+  deleteSegments(datasetId: string, documentId: string, segmentIds: string[]): Promise<Result<unknown>> {
+    // Console API accepts repeated segment_id query params.
+    const qs = segmentIds.map((id) => `segment_id=${encodeURIComponent(id)}`).join("&");
+    return this.call(`datasets/${datasetId}/documents/${documentId}/segments?${qs}`, { method: "DELETE" });
   }
 
   // --- explore (installed apps) ---

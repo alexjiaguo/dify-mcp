@@ -96,6 +96,11 @@ Beyond app workflows, difywf drives the rest of the Dify console surface:
   dataset (yaml), get/sync draft, node_defaults, run draft/published, run_node,
   stop, publish, versions list/get/update/restore/delete. Treat a pipeline_id
   like an app_id for the authoring loop.
+- Classic knowledge bases (knowledge.*): dataset CRUD, document create (from
+  file.upload ids or full KnowledgeConfig), rename/delete, indexing status,
+  hit-testing, and segment add/update/delete.
+- Workspace admin (workspace.invite_members / update_member_role /
+  remove_member): invite by email, change roles, remove members (confirm-gated).
 - Customized snippets (snippet.*): workspace CRUD (list/create/get/update/delete/
   export/import/check_deps) plus a full workflow surface (get/sync draft,
   node_defaults, publish, versions, run_draft/run_node/stop, runs list/get/
@@ -105,6 +110,9 @@ Beyond app workflows, difywf drives the rest of the Dify console surface:
   info/files/read/upload. Multipart uploads (annotation batch_import, agent
   skill/file/sandbox uploads) take a file payload object {name, content_b64, mime?}
   sent as multipart FormData.
+
+MCP hosts that pass a progressToken in tools/call _meta receive
+notifications/progress while SSE runs (draft/run/chat) stream events.
 
 These mirror the app-workflow tools: same contract, same confirm gates, same
 audit log. Fetch node_defaults before authoring rag/snippet graphs too.`,

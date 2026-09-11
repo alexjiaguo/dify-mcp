@@ -31,7 +31,7 @@ const mcpName = (n: string): string => n.replaceAll(".", "_");
 // a single instance for the process lifetime.
 function createMcpServer(): Server {
   const server = new Server(
-    { name: "difywf", version: "0.2.0" },
+    { name: "difywf", version: "0.3.0" },
     { capabilities: { tools: {}, resources: {} } },
   );
 
@@ -43,10 +43,30 @@ function createMcpServer(): Server {
     })),
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (req) => {
+  server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     const tool = tools.find((t) => mcpName(t.name) === req.params.name);
+    const progressToken =
+      (req.params._meta as { progressToken?: string | number } | undefined)?.progressToken ??
+      (req as { _meta?: { progressToken?: string | number } })._meta?.progressToken;
+    const onProgress =
+      progressToken !== undefined
+        ? async (update: { progress: number; total?: number; message?: string }) => {
+            await extra.sendNotification({
+              method: "notifications/progress",
+              params: {
+                progressToken,
+                progress: update.progress,
+                ...(update.total !== undefined ? { total: update.total } : {}),
+                ...(update.message !== undefined ? { message: update.message } : {}),
+              },
+            });
+          }
+        : undefined;
     const result = tool
-      ? await runTool(tool, (req.params.arguments ?? {}) as Record<string, unknown>, { _surface: "mcp" })
+      ? await runTool(tool, (req.params.arguments ?? {}) as Record<string, unknown>, {
+          _surface: "mcp",
+          ...(onProgress ? { _onProgress: onProgress } : {}),
+        })
       : err("USAGE_ERROR", `unknown tool '${req.params.name}'`);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],

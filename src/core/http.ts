@@ -11,6 +11,8 @@ export type RequestOpts = {
   cookies?: Record<string, string>; // console session cookies (cookie-auth surface)
   csrfToken?: string; // X-CSRF-Token header value (double-submit CSRF)
   timeoutMs?: number;
+  /** Called for each SSE data event while streaming (MCP progress). */
+  onEvent?: (event: unknown, index: number) => void | Promise<void>;
 };
 
 const STATUS_MAP: Record<number, ErrCode> = {
@@ -142,7 +144,15 @@ export async function readSse(
       if (!line.startsWith("data:")) continue;
       const payload = line.slice(5).trim();
       if (!payload) continue;
-      events.push(safeJson(payload) ?? payload);
+      const event = safeJson(payload) ?? payload;
+      events.push(event);
+      if (opts.onEvent) {
+        try {
+          await opts.onEvent(event, events.length - 1);
+        } catch {
+          // never break the stream because a progress callback failed
+        }
+      }
     }
   }
   return ok(events);

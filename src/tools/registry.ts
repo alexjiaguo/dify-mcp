@@ -15,7 +15,19 @@ import { isPrivateUrl } from "../core/private-url.ts";
 import { redactArgs } from "../core/redact.ts";
 import { difywfHome } from "../core/paths.ts";
 
-export type ToolCtx = { cfg: Config; openapi: OpenapiClient | null; console: ConsoleClient | null };
+/** Optional MCP progress reporter (CLI leaves this undefined). */
+export type ProgressReporter = (update: {
+  progress: number;
+  total?: number;
+  message?: string;
+}) => void | Promise<void>;
+
+export type ToolCtx = {
+  cfg: Config;
+  openapi: OpenapiClient | null;
+  console: ConsoleClient | null;
+  onProgress?: ProgressReporter;
+};
 export type Tool = {
   name: string;
   summary: string;
@@ -39,6 +51,17 @@ export class ToolError extends Error {
 
 export function makeCtx(flags: Flags): ToolCtx {
   const cfg = resolveConfig(flags);
+  const onProgress =
+    typeof flags._onProgress === "function" ? (flags._onProgress as ProgressReporter) : undefined;
+  const onEvent = onProgress
+    ? async (event: unknown, index: number): Promise<void> => {
+        const message =
+          event && typeof event === "object" && "event" in event
+            ? String((event as Record<string, unknown>).event)
+            : `event_${index + 1}`;
+        await onProgress({ progress: index + 1, message });
+      }
+    : undefined;
   const refreshCb = cfg.consoleCookies
     ? async (cookies: Record<string, string>): Promise<Record<string, string> | null> => {
         const r = await refreshConsoleCookies(cfg.baseUrl, cookies);
@@ -54,8 +77,9 @@ export function makeCtx(flags: Flags): ToolCtx {
     openapi: cfg.baseUrl && cfg.openapiToken ? new OpenapiClient(cfg.baseUrl, cfg.openapiToken) : null,
     console:
       cfg.baseUrl && (cfg.consoleToken || cfg.consoleCookies)
-        ? new ConsoleClient(cfg.baseUrl, cfg.consoleToken, cfg.consoleCookies, refreshCb)
+        ? new ConsoleClient(cfg.baseUrl, cfg.consoleToken, cfg.consoleCookies, refreshCb, onEvent)
         : null,
+    onProgress,
   };
 }
 
@@ -891,6 +915,56 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: "workspace.invite_members",
+    summary: "Invite members by email. Body: {emails: string[], role, language?}. confirm=true required.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: {
+        emails: { type: "array", items: { type: "string" }, description: "email addresses to invite" },
+        role: S("role: owner | admin | editor | normal | dataset_operator"),
+        language: S("invite email language, e.g. en-US"),
+        confirm: CONFIRM,
+      },
+      required: ["emails", "role", "confirm"],
+    },
+    run: async (a, ctx) => {
+      const emails = a.emails;
+      if (!Array.isArray(emails) || !emails.every((e) => typeof e === "string" && e)) {
+        throw new ToolError("USAGE_ERROR", "emails must be a non-empty string array");
+      }
+      const body: Record<string, unknown> = { emails, role: req(a, "role") };
+      if (str(a.language)) body.language = str(a.language);
+      return (needClient(ctx, "console") as ConsoleClient).inviteMembers(body);
+    },
+  },
+  {
+    name: "workspace.update_member_role",
+    summary: "Update a workspace member's role. confirm=true required.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: { member_id: S("member uuid"), role: S("new role"), confirm: CONFIRM },
+      required: ["member_id", "role", "confirm"],
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).updateMemberRole(req(a, "member_id"), req(a, "role")),
+  },
+  {
+    name: "workspace.remove_member",
+    summary: "Remove a workspace member. confirm=true required.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: { member_id: S("member uuid"), confirm: CONFIRM },
+      required: ["member_id", "confirm"],
+    },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).removeMember(req(a, "member_id")),
+  },
+  {
     name: "file.upload",
     summary: "Upload a file. Console uses POST /files/upload (app_id optional). OpenAPI requires app_id. Pass {name, content_b64, mime?} for multipart.",
     schema: { type: "object", properties: { app_id: S("app uuid (required for OpenAPI)"), file: O("file metadata or {name, content_b64, mime?}") }, required: ["file"] },
@@ -1046,7 +1120,7 @@ export const tools: Tool[] = [
     schema: { type: "object", properties: { app_id: S("app uuid"), language: S("language code, e.g. en-US or zh-Hans") }, required: ["app_id", "language"] },
     run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).listVoices(req(a, "app_id"), req(a, "language")),
   },
-  // ============ P2: rag, explore, archive (read-only / run) ============
+  // ============ P2: rag, knowledge, explore, archive (read-only / run) ============
   {
     name: "rag.list_datasets",
     summary: "List RAG pipeline datasets.",
@@ -1060,6 +1134,314 @@ export const tools: Tool[] = [
     needs: "console",
     schema: { type: "object", properties: {} },
     run: async (_a, ctx) => (needClient(ctx, "console") as ConsoleClient).listRagTemplates(),
+  },
+  // --- classic knowledge base (datasets / documents / segments) ---
+  {
+    name: "knowledge.list_datasets",
+    summary: "List classic knowledge-base datasets (same console /datasets list as rag.list_datasets).",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: { page: { type: "number" }, limit: { type: "number" }, keyword: S("search keyword") },
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).listRagDatasets({
+        page: num(a.page),
+        limit: num(a.limit),
+        keyword: str(a.keyword),
+      }),
+  },
+  {
+    name: "knowledge.create_dataset",
+    summary: "Create a classic knowledge dataset. Pass name plus optional description/indexing_technique/permission/provider.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        name: S("dataset name"),
+        description: S("optional description"),
+        indexing_technique: S("high_quality | economy"),
+        permission: S("only_me | all_team_members | partial_members"),
+        provider: S("vendor | external"),
+        body: O("full create body (overrides individual fields when set)"),
+      },
+      required: ["name"],
+    },
+    run: async (a, ctx) => {
+      const body: Record<string, unknown> =
+        a.body && typeof a.body === "object" && !Array.isArray(a.body)
+          ? { ...(a.body as Record<string, unknown>) }
+          : { name: req(a, "name") };
+      if (!body.name) body.name = req(a, "name");
+      for (const key of ["description", "indexing_technique", "permission", "provider"] as const) {
+        if (str(a[key]) && body[key] === undefined) body[key] = str(a[key]);
+      }
+      return (needClient(ctx, "console") as ConsoleClient).createDataset(body);
+    },
+  },
+  {
+    name: "knowledge.get_dataset",
+    summary: "Get one knowledge dataset by id.",
+    needs: "console",
+    schema: { type: "object", properties: { dataset_id: S("dataset uuid") }, required: ["dataset_id"] },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).getDataset(req(a, "dataset_id")),
+  },
+  {
+    name: "knowledge.update_dataset",
+    summary: "Patch a knowledge dataset (name, description, retrieval_model, ...).",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: { dataset_id: S("dataset uuid"), body: O("PATCH body") },
+      required: ["dataset_id", "body"],
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).updateDataset(req(a, "dataset_id"), obj(a, "body")),
+  },
+  {
+    name: "knowledge.delete_dataset",
+    summary: "Delete a knowledge dataset. confirm=true required.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: { dataset_id: S("dataset uuid"), confirm: CONFIRM },
+      required: ["dataset_id", "confirm"],
+    },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).deleteDataset(req(a, "dataset_id")),
+  },
+  {
+    name: "knowledge.list_documents",
+    summary: "List documents in a knowledge dataset.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        dataset_id: S("dataset uuid"),
+        page: { type: "number" },
+        limit: { type: "number" },
+        keyword: S("search keyword"),
+        status: S("indexing status filter"),
+      },
+      required: ["dataset_id"],
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).listDocuments(req(a, "dataset_id"), {
+        page: num(a.page),
+        limit: num(a.limit),
+        keyword: str(a.keyword),
+        status: str(a.status),
+      }),
+  },
+  {
+    name: "knowledge.get_document",
+    summary: "Get one document in a knowledge dataset.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: { dataset_id: S("dataset uuid"), document_id: S("document uuid") },
+      required: ["dataset_id", "document_id"],
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).getDocument(req(a, "dataset_id"), req(a, "document_id")),
+  },
+  {
+    name: "knowledge.create_document",
+    summary:
+      "Create documents in a dataset. Pass KnowledgeConfig via body, or shortcut file_ids (from file.upload) + indexing_technique.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        dataset_id: S("dataset uuid"),
+        body: O("full KnowledgeConfig body"),
+        file_ids: { type: "array", items: { type: "string" }, description: "upload_file ids from file.upload" },
+        indexing_technique: S("high_quality | economy (with file_ids shortcut)"),
+        name: S("optional document name (file_ids shortcut)"),
+      },
+      required: ["dataset_id"],
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).createDocument(
+        req(a, "dataset_id"),
+        buildKnowledgeDocumentBody(a),
+      ),
+  },
+  {
+    name: "knowledge.delete_document",
+    summary: "Delete a document from a dataset. confirm=true required.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: { dataset_id: S("dataset uuid"), document_id: S("document uuid"), confirm: CONFIRM },
+      required: ["dataset_id", "document_id", "confirm"],
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).deleteDocument(req(a, "dataset_id"), req(a, "document_id")),
+  },
+  {
+    name: "knowledge.rename_document",
+    summary: "Rename a document in a dataset.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: { dataset_id: S("dataset uuid"), document_id: S("document uuid"), name: S("new name") },
+      required: ["dataset_id", "document_id", "name"],
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).renameDocument(
+        req(a, "dataset_id"),
+        req(a, "document_id"),
+        req(a, "name"),
+      ),
+  },
+  {
+    name: "knowledge.indexing_status",
+    summary: "Get indexing status for a dataset (or one document when document_id is set).",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: { dataset_id: S("dataset uuid"), document_id: S("optional document uuid") },
+      required: ["dataset_id"],
+    },
+    run: async (a, ctx) => {
+      const c = needClient(ctx, "console") as ConsoleClient;
+      const docId = str(a.document_id);
+      return docId
+        ? c.documentIndexingStatus(req(a, "dataset_id"), docId)
+        : c.datasetIndexingStatus(req(a, "dataset_id"));
+    },
+  },
+  {
+    name: "knowledge.hit_testing",
+    summary: "Run retrieval hit-testing against a dataset. Body needs at least {query}.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        dataset_id: S("dataset uuid"),
+        query: S("query text (shortcut when body omitted)"),
+        body: O("full HitTestingPayload"),
+      },
+      required: ["dataset_id"],
+    },
+    run: async (a, ctx) => {
+      const body =
+        a.body && typeof a.body === "object" && !Array.isArray(a.body)
+          ? (a.body as Record<string, unknown>)
+          : { query: req(a, "query") };
+      if (!nonEmptyStr(body.query) && str(a.query)) body.query = str(a.query);
+      if (!nonEmptyStr(body.query)) throw new ToolError("USAGE_ERROR", "query or body.query is required");
+      return (needClient(ctx, "console") as ConsoleClient).hitTesting(req(a, "dataset_id"), body);
+    },
+  },
+  {
+    name: "knowledge.list_segments",
+    summary: "List segments of a document.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        dataset_id: S("dataset uuid"),
+        document_id: S("document uuid"),
+        page: { type: "number" },
+        limit: { type: "number" },
+        keyword: S("search keyword"),
+        enabled: S("true | false"),
+      },
+      required: ["dataset_id", "document_id"],
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).listSegments(req(a, "dataset_id"), req(a, "document_id"), {
+        page: num(a.page),
+        limit: num(a.limit),
+        keyword: str(a.keyword),
+        enabled: str(a.enabled),
+      }),
+  },
+  {
+    name: "knowledge.add_segment",
+    summary: "Add a segment to a document. Body: {content, keywords?, answer?} or content shortcut.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        dataset_id: S("dataset uuid"),
+        document_id: S("document uuid"),
+        content: S("segment text (shortcut)"),
+        keywords: { type: "array", items: { type: "string" } },
+        answer: S("optional Q&A answer"),
+        body: O("full segment create body"),
+      },
+      required: ["dataset_id", "document_id"],
+    },
+    run: async (a, ctx) => {
+      let body: Record<string, unknown>;
+      if (a.body && typeof a.body === "object" && !Array.isArray(a.body)) {
+        body = { ...(a.body as Record<string, unknown>) };
+      } else {
+        body = { content: req(a, "content") };
+      }
+      if (!nonEmptyStr(body.content) && str(a.content)) body.content = str(a.content);
+      if (!nonEmptyStr(body.content)) throw new ToolError("USAGE_ERROR", "content or body.content is required");
+      if (Array.isArray(a.keywords) && body.keywords === undefined) body.keywords = a.keywords;
+      if (str(a.answer) && body.answer === undefined) body.answer = str(a.answer);
+      return (needClient(ctx, "console") as ConsoleClient).addSegment(
+        req(a, "dataset_id"),
+        req(a, "document_id"),
+        body,
+      );
+    },
+  },
+  {
+    name: "knowledge.update_segment",
+    summary: "Update a segment (content, keywords, enabled, ...).",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        dataset_id: S("dataset uuid"),
+        document_id: S("document uuid"),
+        segment_id: S("segment uuid"),
+        body: O("PATCH body"),
+      },
+      required: ["dataset_id", "document_id", "segment_id", "body"],
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).updateSegment(
+        req(a, "dataset_id"),
+        req(a, "document_id"),
+        req(a, "segment_id"),
+        obj(a, "body"),
+      ),
+  },
+  {
+    name: "knowledge.delete_segments",
+    summary: "Delete one or more segments. confirm=true required.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: {
+        dataset_id: S("dataset uuid"),
+        document_id: S("document uuid"),
+        segment_ids: { type: "array", items: { type: "string" }, description: "segment uuids to delete" },
+        confirm: CONFIRM,
+      },
+      required: ["dataset_id", "document_id", "segment_ids", "confirm"],
+    },
+    run: async (a, ctx) => {
+      const ids = a.segment_ids;
+      if (!Array.isArray(ids) || !ids.length || !ids.every((id) => typeof id === "string" && id)) {
+        throw new ToolError("USAGE_ERROR", "segment_ids must be a non-empty string array");
+      }
+      return (needClient(ctx, "console") as ConsoleClient).deleteSegments(
+        req(a, "dataset_id"),
+        req(a, "document_id"),
+        ids as string[],
+      );
+    },
   },
   {
     name: "explore.run",
@@ -1727,7 +2109,30 @@ function defaultsToMap(data: unknown): Record<string, unknown> {
   return data && typeof data === "object" ? (data as Record<string, unknown>) : {};
 }
 
+function buildKnowledgeDocumentBody(a: Record<string, unknown>): Record<string, unknown> {
+  if (a.body && typeof a.body === "object" && !Array.isArray(a.body)) {
+    return a.body as Record<string, unknown>;
+  }
+  const fileIds = a.file_ids;
+  if (Array.isArray(fileIds) && fileIds.length && fileIds.every((id) => typeof id === "string" && id)) {
+    const body: Record<string, unknown> = {
+      indexing_technique: str(a.indexing_technique) ?? "high_quality",
+      data_source: {
+        info_list: {
+          data_source_type: "upload_file",
+          file_info_list: { file_ids: fileIds },
+        },
+      },
+      process_rule: { mode: "automatic" },
+    };
+    if (str(a.name)) body.name = str(a.name);
+    return body;
+  }
+  throw new ToolError("USAGE_ERROR", "pass body (KnowledgeConfig) or file_ids from file.upload");
+}
+
 const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
+const nonEmptyStr = (v: unknown): v is string => typeof v === "string" && v.length > 0;
 const num = (v: unknown): number | undefined => (typeof v === "number" ? v : typeof v === "string" && v && !Number.isNaN(Number(v)) ? Number(v) : undefined);
 const req = (args: Record<string, unknown>, key: string): string => {
   const v = str(args[key]);
