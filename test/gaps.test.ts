@@ -101,6 +101,29 @@ test("workflow.sync_draft preserves env vars when omitted", async () => {
   assert.equal(captured.hash, "h1");
 });
 
+test("workflow.sync_draft omits env/conversation vars when draft is uninitialized", async () => {
+  let captured: Record<string, unknown> = {};
+  const fake = {
+    getDraft: async (): Promise<Result<unknown>> => ({
+      ok: false,
+      error: { code: "NOT_FOUND", message: "Draft workflow need to be initialized.", retryable: false },
+    }),
+    syncDraft: async (_id: string, body: Record<string, unknown>): Promise<Result<unknown>> => {
+      captured = body;
+      return { ok: true, data: { hash: "h2" } };
+    },
+  };
+  const r = await find("workflow.sync_draft").run(
+    { app_id: "a1", graph: startGraph },
+    fakeCtx({ console: fake as never }),
+  );
+  assert.ok(r.ok);
+  assert.deepEqual(Object.keys(captured).sort(), ["features", "graph"]);
+  assert.equal("environment_variables" in captured, false);
+  assert.equal("conversation_variables" in captured, false);
+  assert.equal("hash" in captured, false);
+});
+
 test("workflow.sync_draft accepts graph_json", async () => {
   let captured: Record<string, unknown> = {};
   const fake = {
@@ -133,6 +156,49 @@ test("workflow.sync_draft requires confirm when the graph has code nodes", async
   const r = await find("workflow.sync_draft").run(
     { app_id: "a1", graph },
     fakeCtx({ console: fake as never }),
+  );
+  assert.ok(!r.ok);
+  if (!r.ok) assert.equal(r.error.code, "CONFIRM_REQUIRED");
+});
+
+test("workflow.sync_draft dry_run surfaces AUTH_EXPIRED from getDraft", async () => {
+  const fake = {
+    getDraft: async (): Promise<Result<unknown>> => ({
+      ok: false,
+      error: { code: "AUTH_EXPIRED", message: "Token has expired.", retryable: false },
+    }),
+  };
+  const r = await find("workflow.sync_draft").run(
+    { app_id: "a1", graph: startGraph, dry_run: true },
+    fakeCtx({ console: fake as never }),
+  );
+  assert.ok(!r.ok);
+  if (!r.ok) assert.equal(r.error.code, "AUTH_EXPIRED");
+});
+
+test("workflow.sync_draft dry_run allows uninitialized drafts with null diff", async () => {
+  const fake = {
+    getDraft: async (): Promise<Result<unknown>> => ({
+      ok: false,
+      error: { code: "NOT_FOUND", message: "Draft workflow need to be initialized.", retryable: false },
+    }),
+  };
+  const r = await find("workflow.sync_draft").run(
+    { app_id: "a1", graph: startGraph, dry_run: true },
+    fakeCtx({ console: fake as never }),
+  );
+  assert.ok(r.ok);
+  if (r.ok) {
+    assert.equal((r.data as Record<string, unknown>).dry_run, true);
+    assert.equal((r.data as Record<string, unknown>).diff, null);
+  }
+});
+
+test("workflow.update_variable is confirm-gated", async () => {
+  const r = await runTool(
+    find("workflow.update_variable"),
+    { app_id: "a1", variable_id: "v1", variable: { name: "SECRET", value: "x" } },
+    { _surface: "mcp" },
   );
   assert.ok(!r.ok);
   if (!r.ok) assert.equal(r.error.code, "CONFIRM_REQUIRED");

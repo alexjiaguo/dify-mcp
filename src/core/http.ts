@@ -44,7 +44,8 @@ function encodeBody(body: unknown): { extra: Record<string, string>; payload: Bo
 }
 
 export function classifyHttpFailure(status: number, data: unknown, text: string): Result<never> {
-  const message = extractMessage(data) ?? `HTTP ${status}`;
+  const looksHtml = typeof text === "string" && /^\s*</.test(text) && /<\/?[a-z]/i.test(text);
+  const message = extractMessage(data) ?? (looksHtml ? `HTTP ${status}` : undefined) ?? `HTTP ${status}`;
   const blob = `${message} ${data && typeof data === "object" ? JSON.stringify(data) : text}`;
   if (status === 400 && /not.?sync|hash.?not.?equal|DraftWorkflowNotSync|WorkflowHashNotEqual/i.test(blob)) {
     return err("VALIDATION_FAILED", message, {
@@ -55,7 +56,7 @@ export function classifyHttpFailure(status: number, data: unknown, text: string)
   const code = status >= 500 ? "SERVER_ERROR" : (STATUS_MAP[status] ?? "SERVER_ERROR");
   return err(code, message, {
     retryable: status >= 500 || status === 429,
-    details: data ?? text.slice(0, 500),
+    details: looksHtml ? { status, content_type: "html" } : (data ?? text.slice(0, 500)),
   });
 }
 

@@ -396,17 +396,22 @@ export const tools: Tool[] = [
       const policy = assertGraphPolicies(graph, args, dryRun);
       if (policy) return policy;
       const current = await client.getDraft(req(args, "app_id"));
+      if (dryRun) return dryRunBaseline(current, graph, issues);
       const fields = current.ok ? draftFields(current.data) : {};
-      if (dryRun) {
-        return ok({ dry_run: true, diff: fields.graph ? graphDiff(fields.graph, graph) : null, issues });
-      }
+      // Cloud SyncDraftWorkflowPayload requires graph+features. Env/conversation
+      // variables are optional there and rejected as extra_forbidden when sent as
+      // [] on an uninitialized draft — only include them when the caller or the
+      // current draft actually has them.
       const body: Record<string, unknown> = {
         graph,
         features: args.features ?? fields.features ?? {},
-        environment_variables: args.environment_variables ?? fields.environment_variables ?? [],
-        conversation_variables: args.conversation_variables ?? fields.conversation_variables ?? [],
-        hash: str(args.hash) ?? fields.hash,
       };
+      const envVars = args.environment_variables ?? fields.environment_variables;
+      const convVars = args.conversation_variables ?? fields.conversation_variables;
+      const hash = str(args.hash) ?? fields.hash;
+      if (envVars !== undefined) body.environment_variables = envVars;
+      if (convVars !== undefined) body.conversation_variables = convVars;
+      if (hash !== undefined) body.hash = hash;
       return client.syncDraft(req(args, "app_id"), body);
     },
   },
@@ -630,9 +635,10 @@ export const tools: Tool[] = [
   },
   {
     name: "workflow.update_variable",
-    summary: "Update a draft variable by id.",
+    summary: "Update a draft variable by id. Can overwrite secrets; requires confirm=true.",
     needs: "console",
-    schema: { type: "object", properties: { app_id: S("app uuid"), variable_id: S("variable uuid"), variable: O("variable definition") }, required: ["app_id", "variable_id", "variable"] },
+    confirm: true,
+    schema: { type: "object", properties: { app_id: S("app uuid"), variable_id: S("variable uuid"), variable: O("variable definition"), confirm: CONFIRM }, required: ["app_id", "variable_id", "variable", "confirm"] },
     run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).updateVariable(req(a, "app_id"), req(a, "variable_id"), obj(a, "variable")),
   },
   {
@@ -1195,13 +1201,15 @@ export const tools: Tool[] = [
       const policy = assertGraphPolicies(graph, a, dryRun);
       if (policy) return policy;
       const current = await client.getRagDraft(req(a, "pipeline_id"));
+      if (dryRun) return dryRunBaseline(current, graph, issues);
       const fields = current.ok ? draftFields(current.data) : {};
-      if (dryRun) return ok({ dry_run: true, diff: fields.graph ? graphDiff(fields.graph, graph) : null, issues });
-      return client.syncRagDraft(req(a, "pipeline_id"), {
+      const body: Record<string, unknown> = {
         graph,
         features: a.features ?? fields.features ?? {},
-        hash: str(a.hash) ?? fields.hash,
-      });
+      };
+      const hash = str(a.hash) ?? fields.hash;
+      if (hash !== undefined) body.hash = hash;
+      return client.syncRagDraft(req(a, "pipeline_id"), body);
     },
   },
   {
@@ -1398,13 +1406,15 @@ export const tools: Tool[] = [
       const policy = assertGraphPolicies(graph, a, dryRun);
       if (policy) return policy;
       const current = await client.getSnippetDraft(req(a, "snippet_id"));
+      if (dryRun) return dryRunBaseline(current, graph, issues);
       const fields = current.ok ? draftFields(current.data) : {};
-      if (dryRun) return ok({ dry_run: true, diff: fields.graph ? graphDiff(fields.graph, graph) : null, issues });
-      return client.syncSnippetDraft(req(a, "snippet_id"), {
+      const body: Record<string, unknown> = {
         graph,
         features: a.features ?? fields.features ?? {},
-        hash: str(a.hash) ?? fields.hash,
-      });
+      };
+      const hash = str(a.hash) ?? fields.hash;
+      if (hash !== undefined) body.hash = hash;
+      return client.syncSnippetDraft(req(a, "snippet_id"), body);
     },
   },
   {
@@ -1624,10 +1634,36 @@ export async function runTool(tool: Tool, args: Record<string, unknown>, flags: 
   return result;
 }
 
+function dryRunBaseline(
+  current: Result<unknown>,
+  graph: Graph,
+  issues: ReturnType<typeof validateGraph>,
+): Result<unknown> {
+  if (!current.ok) {
+    // Brand-new apps have no draft yet — graph is already validated; no baseline to diff.
+    if (
+      current.error.code === "NOT_FOUND" &&
+      /not.?initializ|need to be initialized/i.test(current.error.message)
+    ) {
+      return ok({ dry_run: true, diff: null, issues });
+    }
+    return current;
+  }
+  const fields = draftFields(current.data);
+  return ok({ dry_run: true, diff: fields.graph ? graphDiff(fields.graph, graph) : null, issues });
+}
+
 function audit(surface: string, tool: string, args: Record<string, unknown>, result: Result<unknown>): void {
   try {
+    // Unit tests that forget DIFYWF_HOME must not append to ~/.difywf/audit.jsonl.
+    if (process.env.NODE_TEST_CONTEXT && !process.env.DIFYWF_HOME) return;
     const dir = difywfHome();
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try {
+      fs.chmodSync(dir, 0o700);
+    } catch {
+      // ignore platforms that cannot chmod
+    }
     const file = path.join(dir, "audit.jsonl");
     if (!fs.existsSync(file)) fs.writeFileSync(file, "", { mode: 0o600 });
     const entry = {

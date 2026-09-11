@@ -8,9 +8,13 @@ test("redactArgs hides nested credentials and cookies", () => {
     credentials: { api_key: "sk-live" },
     nested: { password: "pw", ok: 1 },
     yaml: "kind: app",
+    environment_variables: [{ name: "SECRET", value: "hunter2" }],
+    conversation_variables: [{ name: "c", value: "keep-me-out" }],
   });
   assert.equal(out.credentials, "[redacted]");
   assert.equal(out.graph, "[redacted]");
   assert.equal(out.yaml, "[redacted]");
+  assert.equal(out.environment_variables, "[redacted]");
+  assert.equal(out.conversation_variables, "[redacted]");
   assert.deepEqual(out.nested, { password: "[redacted]", ok: 1 });
 });

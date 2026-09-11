@@ -3,9 +3,30 @@ import type { IncomingHttpHeaders } from "node:http";
 
 export const DEFAULT_MCP_MAX_BODY = 2 * 1024 * 1024;
 
+/** Hostname from a Host header value (`example.com:443`, `[::1]:3000`). */
+export function hostnameFromHostHeader(hostHeader: string): string {
+  const h = hostHeader.trim().toLowerCase();
+  if (h.startsWith("[")) {
+    const end = h.indexOf("]");
+    if (end > 0) return h.slice(1, end).split("%")[0];
+  }
+  const colon = h.lastIndexOf(":");
+  // Only strip :port when the suffix is decimal (IPv4/name). Bare IPv6 has multiple colons.
+  if (colon > 0 && /^\d+$/.test(h.slice(colon + 1)) && h.indexOf(":") === colon) {
+    return h.slice(0, colon);
+  }
+  return h.split("%")[0];
+}
+
 export function isLoopbackHost(host: string): boolean {
-  const h = host.replace(/^\[|\]$/g, "").split("%")[0].toLowerCase();
-  return h === "127.0.0.1" || h === "localhost" || h === "::1" || h === "0:0:0:0:0:0:0:1";
+  const h = hostnameFromHostHeader(host).replace(/^\[|\]$/g, "").split("%")[0].toLowerCase();
+  return (
+    h === "127.0.0.1" ||
+    h === "localhost" ||
+    h === "localhost." ||
+    h === "::1" ||
+    h === "0:0:0:0:0:0:0:1"
+  );
 }
 
 export function bindRequiresToken(bindHost: string, token: string | undefined): string | undefined {
@@ -39,9 +60,9 @@ export function hostHeaderAllowed(
   tokenConfigured: boolean,
 ): boolean {
   if (!hostHeader) return false;
-  const hostname = hostHeader.split(":")[0]?.replace(/^\[|\]$/g, "").toLowerCase() ?? "";
+  const hostname = hostnameFromHostHeader(hostHeader);
   if (isLoopbackHost(hostname)) return true;
-  if (hostname === bindHost.toLowerCase()) return true;
+  if (hostname === hostnameFromHostHeader(bindHost)) return true;
   const extra = (process.env.DIFYWF_MCP_ALLOWED_HOSTS ?? "")
     .split(",")
     .map((s) => s.trim().toLowerCase())

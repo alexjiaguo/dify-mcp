@@ -46,6 +46,26 @@ function keychainEnabled(): boolean {
   return process.platform === "darwin";
 }
 
+function decodeKeychainBlob(raw: string): string {
+  const trimmed = raw.trim();
+  // `security -w` hex-encodes values that contain newlines or other non-ASCII
+  // bytes. Compact JSON avoids that on write; still decode hex so older
+  // pretty-printed entries remain readable.
+  if (/^[0-9a-fA-F]+$/.test(trimmed) && trimmed.length % 2 === 0 && trimmed.startsWith("7b")) {
+    try {
+      return Buffer.from(trimmed, "hex").toString("utf8");
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
+}
+
+/** @internal exported for unit tests */
+export function decodeKeychainBlobForTest(raw: string): string {
+  return decodeKeychainBlob(raw);
+}
+
 function keychainGet(): string | undefined {
   try {
     const out = execFileSync(
@@ -53,7 +73,8 @@ function keychainGet(): string | undefined {
       ["find-generic-password", "-s", "difywf-hosts", "-a", "difywf", "-w"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
     );
-    return out.trim() || undefined;
+    const decoded = decodeKeychainBlob(out);
+    return decoded || undefined;
   } catch {
     return undefined;
   }
@@ -61,6 +82,7 @@ function keychainGet(): string | undefined {
 
 function keychainSet(json: string): boolean {
   try {
+    // Single-line JSON: multiline secrets come back as hex from `security -w`.
     execFileSync(
       "security",
       ["add-generic-password", "-U", "-s", "difywf-hosts", "-a", "difywf", "-w", json],
@@ -104,9 +126,10 @@ function publicHostsView(h: HostsFile): HostsFile {
 
 export function saveHosts(h: HostsFile): void {
   ensureHome();
-  const full = JSON.stringify(h, null, 2);
+  // Compact JSON for keychain: `security -w` hex-encodes multiline secrets.
+  const compact = JSON.stringify(h);
   let wroteKeychain = false;
-  if (keychainEnabled()) wroteKeychain = keychainSet(full);
+  if (keychainEnabled()) wroteKeychain = keychainSet(compact);
   const onDisk = wroteKeychain ? publicHostsView(h) : h;
   fs.writeFileSync(storePath(), JSON.stringify(onDisk, null, 2), { mode: 0o600 });
   try {

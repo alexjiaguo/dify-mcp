@@ -12,7 +12,7 @@ Dify workflows autonomously — everything a human can do in the UI, now scripta
 [![Release](https://img.shields.io/github/v/release/alexjiaguo/dify-mcp)](https://github.com/alexjiaguo/dify-mcp/releases/latest)
 [![Node >= 23.6](https://img.shields.io/badge/node-%E2%89%A523.6-green.svg)](https://nodejs.org)
 [![153 Tools](https://img.shields.io/badge/tools-153-purple.svg)](#tools)
-[![Live Verified](https://img.shields.io/badge/live--verified-cloud.dify.ai-brightgreen.svg)](#live-verified)
+[![Live Verified](https://img.shields.io/badge/live--verified-authoring%20loop-brightgreen.svg)](#live-verified)
 
 Works with **Claude Code** · **Codex** · **Gemini CLI** · **Cursor** · **Cline** · **Windsurf** · **Roo Code** · **Continue** · **Aider** · **Zed** — and any other MCP-compatible or shell-capable agent.
 
@@ -121,15 +121,26 @@ Don't see your agent? If it supports MCP or can run shell commands, it works. Th
 
 ## Live verified
 
-Every tool category has been tested against **cloud.dify.ai** with real credentials:
+Authoring loop verified against **cloud.dify.ai** with console cookie auth:
 
-- ✅ Full authoring loop: create app → sync draft → run draft → publish → list versions
-- ✅ All 18 namespaces exercised: apps, workflows, providers, plugins, triggers,
-  snippets, RAG, agents, stats, comments, annotations, audio, files, runs, workspace,
-  archive, explore, auth
-- ✅ MCP transport: `tools/call` over stdio and Streamable HTTP with live cookie auth
+- ✅ Create app → sync draft (echo graph) → run draft → delete (MCP Streamable HTTP)
+- ✅ MCP transport: `tools/call` over stdio and Streamable HTTP
 - ✅ Example templates in `examples/` validate clean (echo, LLM, RAG)
 - ✅ Unit tests · typecheck clean · MCP smoke (153 tools)
+
+Not every one of the 153 tools is live-probed on every release. Coverage is densest on
+the authoring path (apps, workflow draft/run/publish, auth, MCP guardrails). Surfaces
+such as RAG pipelines, snippets, agents, annotations, and audio are implemented against
+the console API contract and unit-tested; treat them as best-effort until you exercise
+them on your instance.
+
+### Known gaps vs the full Dify UI
+
+Still deferred (not blocking for workflow authoring):
+
+- Classic knowledge-base document CRUD (upload/segment edit beyond RAG pipeline tools)
+- Workspace member invite / role admin
+- Incremental MCP progress notifications for long SSE runs
 
 ## Quickstart
 

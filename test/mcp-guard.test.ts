@@ -34,3 +34,10 @@ test("anonymous loopback requires a loopback Host header", () => {
   assert.equal(hostHeaderAllowed("evil.example", "127.0.0.1", false), false);
   assert.equal(hostHeaderAllowed("dify-mcp:3000", "0.0.0.0", true), true);
 });
+
+test("IPv6 Host headers are accepted for loopback binds", () => {
+  assert.equal(isLoopbackHost("::1"), true);
+  assert.equal(hostHeaderAllowed("[::1]:3000", "::1", false), true);
+  assert.equal(hostHeaderAllowed("[::1]:3000", "127.0.0.1", false), true);
+  assert.equal(hostHeaderAllowed("localhost:3000", "::1", false), true);
+});

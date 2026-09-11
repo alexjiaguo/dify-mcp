@@ -1,5 +1,5 @@
 const SENSITIVE_KEY =
-  /token|secret|credential|password|passwd|api[-_]?key|authorization|cookie|csrf|refresh|^yaml$|graph_json|content_b64|^graph$/i;
+  /token|secret|credential|password|passwd|api[-_]?key|authorization|cookie|csrf|refresh|^yaml$|graph_json|content_b64|^graph$|environment_variables|conversation_variables|^credentials$/i;
 
 export function redactValue(key: string, value: unknown): unknown {
   if (SENSITIVE_KEY.test(key)) return "[redacted]";

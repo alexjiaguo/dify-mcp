@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateGraph, type Graph, type Issue } from "../src/graph/validate.ts";
+import { isPrivateHostname, isPrivateUrl } from "../src/core/private-url.ts";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const load = (name: string): Graph => JSON.parse(fs.readFileSync(path.join(dir, "fixtures", name), "utf8")) as Graph;
@@ -133,6 +134,16 @@ test("http-request URLs targeting private hosts warn PRIVATE_URL", () => {
   const issues = validateGraph(graph);
   assert.equal(codes(issues).length, 0);
   assert.ok(issues.some((i) => i.code === "PRIVATE_URL" && i.level === "warning"));
+});
+
+test("private-url checks cover IPv6 ULA, mapped IPv4, trailing-dot localhost, and CGNAT", () => {
+  assert.equal(isPrivateHostname("fd00::1"), true);
+  assert.equal(isPrivateHostname("fe80::1"), true);
+  assert.equal(isPrivateHostname("::ffff:127.0.0.1"), true);
+  assert.equal(isPrivateHostname("localhost."), true);
+  assert.equal(isPrivateHostname("100.64.0.1"), true);
+  assert.equal(isPrivateUrl("http://[fd12:3456::1]/yaml"), true);
+  assert.equal(isPrivateHostname("8.8.8.8"), false);
 });
 
 test("all example templates in examples/ produce no error-level issues", () => {
