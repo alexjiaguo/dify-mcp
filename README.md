@@ -4,14 +4,14 @@
 
 ### The most complete MCP server + CLI for [Dify](https://github.com/langgenius/dify)
 
-**172 tools. 19 namespaces. One registry.** Let any AI agent build, test, and ship
+**174 tools. 19 namespaces. One registry.** Let any AI agent build, test, and ship
 Dify workflows autonomously — everything a human can do in the UI, now scriptable.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/alexjiaguo/dify-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/alexjiaguo/dify-mcp/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/alexjiaguo/dify-mcp)](https://github.com/alexjiaguo/dify-mcp/releases/latest)
 [![Node >= 23.6](https://img.shields.io/badge/node-%E2%89%A523.6-green.svg)](https://nodejs.org)
-[![172 Tools](https://img.shields.io/badge/tools-172-purple.svg)](#tools)
+[![174 Tools](https://img.shields.io/badge/tools-174-purple.svg)](#tools)
 [![Live Verified](https://img.shields.io/badge/live--verified-authoring%20loop-brightgreen.svg)](#live-verified)
 
 Works with **Claude Code** · **Codex** · **Gemini CLI** · **Cursor** · **Cline** · **Windsurf** · **Roo Code** · **Continue** · **Aider** · **Zed** — and any other MCP-compatible or shell-capable agent.
@@ -28,7 +28,7 @@ create workflows, wire up nodes, test them, iterate, and publish — without a b
 
 **dify-mcp** is the bridge. It exposes the **entire Dify console API** as a unified
 tool registry with **two surfaces**: a CLI any shell-capable agent can drive, and an
-MCP server (stdio or Streamable HTTP) any MCP-compatible host can attach. Same 172 tools, same JSON
+MCP server (stdio or Streamable HTTP) any MCP-compatible host can attach. Same 174 tools, same JSON
 contract, same safety guarantees.
 
 ```
@@ -36,7 +36,7 @@ contract, same safety guarantees.
 │                    dify-mcp                              │
 │                                                          │
 │   ┌──────────┐    ┌────────────────────┐    ┌─────────┐ │
-│   │  CLI     │───▶│   172-tool         │───▶│  Dify   │ │
+│   │  CLI     │───▶│   174-tool         │───▶│  Dify   │ │
 │   │  difywf  │    │   registry         │    │  API    │ │
 │   └──────────┘    │                    │    └─────────┘ │
 │   ┌──────────┐    │  app · workflow    │         ▲      │
@@ -109,6 +109,10 @@ Don't see your agent? If it supports MCP or can run shell commands, it works. Th
 - **MCP progress notifications.** Long SSE runs (`workflow.run_draft`, chat, …)
   emit `notifications/progress` when the host supplies a `progressToken` in
   `tools/call` `_meta`.
+- **Local backup and migration.** `app.backup` bulk-exports DSLs plus a manifest;
+  `app.restore` dry-runs conflicts and imports to another configured Dify instance.
+- **Explicit compatibility matrix.** Dify `1.17.x` and `1.16.x` are supported;
+  older versions are intentionally unsupported.
 
 ## What's new in [v0.2.0](https://github.com/alexjiaguo/dify-mcp/releases/tag/v0.2.0)
 
@@ -132,14 +136,28 @@ Don't see your agent? If it supports MCP or can run shell commands, it works. Th
 
 ## Live verified
 
-Authoring loop verified against **cloud.dify.ai** with console cookie auth:
+Authoring loop verified against **cloud.dify.ai 1.17.0** with console cookie auth:
 
 - ✅ Create app → sync draft (echo graph) → run draft → delete (MCP Streamable HTTP)
 - ✅ MCP transport: `tools/call` over stdio and Streamable HTTP
 - ✅ Example templates in `examples/` validate clean (echo, LLM, RAG)
-- ✅ Unit tests · typecheck clean · MCP smoke (172 tools)
+- ✅ Unit tests · typecheck clean · MCP smoke (174 tools)
 
-Not every one of the 172 tools is live-probed on every release. Coverage is densest on
+### Dify compatibility
+
+| dify-mcp | Dify | DSL | Graphon | Support |
+|---|---|---|---|---|
+| 0.3.x | 1.17.x | 0.7.0 | 0.7.0 | Supported; cloud 1.17.0 live-verified |
+| 0.3.x | 1.16.x | 0.7.0 | 0.6.0 | Best-effort; not live-verified |
+| 0.3.x | <=1.15.x and 0.x | varies | varies | Unsupported; no legacy adapter |
+
+Cloud and self-hosted Dify releases can expose different console contracts even
+within a minor series. When reporting an issue, include the response header
+`x-version` (or your deployment version), the `difywf --version` output, and the
+exact command/tool call. DSL version drift is a hard failure
+(`DSL_VERSION_MISMATCH`), not something the agent should edit around.
+
+Not every one of the 174 tools is live-probed on every release. Coverage is densest on
 the authoring path (apps, workflow draft/run/publish, auth, MCP guardrails). Surfaces
 such as knowledge bases, RAG pipelines, snippets, agents, annotations, and audio are
 implemented against the console API contract and unit-tested; treat them as best-effort
@@ -213,9 +231,28 @@ Starter graphs live in [`examples/`](examples/): `minimal-workflow.json` (echo),
 `llm-workflow.json` (start → LLM → answer), `rag-workflow.json` (knowledge
 retrieval). All three pass `difywf wf validate` with no error-level issues.
 
+### Back up and migrate
+
+```bash
+# Source instance: writes one DSL per app plus manifest.json (secrets excluded)
+difywf app backup ./dify-backup
+
+# Target instance: authenticate or set DIFY_API_BASE first, then preview
+difywf app restore ./dify-backup --dry-run
+
+# Import after reviewing name conflicts; skip is the default
+difywf app restore ./dify-backup --yes
+```
+
+Filters are available for larger workspaces: `--app-ids <id...>`, `--mode workflow`,
+`--name production`, and `--limit 50`. Backups are local files with mode `0600`.
+`include_secret=true` and `overwrite=true` both require `--yes`. Scheduled jobs,
+Git, and S3-compatible storage are intentionally not bundled; use `dify-dsl-pipe`
+when you need a dedicated backup service.
+
 ### Connect your agent (MCP)
 
-Same binary, same 172 tools. Copy-paste the config for your host:
+Same binary, same 174 tools. Copy-paste the config for your host:
 
 <details>
 <summary><b>Claude Code</b></summary>
@@ -345,12 +382,12 @@ putting cookies or tokens in the image.
 
 ## Tools
 
-**172 tools across 19 namespaces.** Run `difywf --help` for the full live list, or
+**174 tools across 19 namespaces.** Run `difywf --help` for the full live list, or
 `difywf agent guide` for the agent-oriented playbook.
 
 | Namespace | Tools | What it does |
 |-----------|-------|-------------|
-| `app` | 17 | List, create, update, verified tags, delete, export, import (console cookies or OpenAPI; `--yaml @file`), copy, rename, convert, chat, complete |
+| `app` | 19 | List, create, update, verified tags, delete, export, bulk backup, import/restore (console cookies or OpenAPI; `--yaml @file`), copy, rename, convert, chat, complete |
 | `workflow` | 29 | Get/sync drafts, validate (incl. iteration/loop sub-graphs), run, publish, workflow-as-tool providers, node last-run, variables, versions, HITL, features, triggers |
 | `provider` | 3 | List providers, list models, set credentials |
 | `plugin` | 4 | List, get, install, uninstall plugins |
@@ -374,9 +411,9 @@ putting cookies or tokens in the image.
 
 | Mechanism | How it works |
 |-----------|-------------|
-| **Confirm gates** | Destructive ops (`delete`, `publish`, `restore`, `set_credentials`, plugin install, trigger create/enable, tag bind/unbind, workflow-tool refresh/delete, …) require `confirm=true` / `--yes`. Without it: exit code `4`. Graphs with code nodes also need confirm unless `DIFYWF_CODE_NODES=allow`. |
+| **Confirm gates** | Destructive ops (`delete`, `publish`, `restore`, `app.restore`, `set_credentials`, plugin install, trigger create/enable, tag bind/unbind, workflow-tool refresh/delete, …) require `confirm=true` / `--yes`. Without it: exit code `4`. `app.backup` also gates `include_secret=true` and `overwrite=true`. Graphs with code nodes need confirm unless `DIFYWF_CODE_NODES=allow`. |
 | **Offline validation** | `sync_draft` validates structure, variable refs, connectivity, and cycles *before* hitting the API — including iteration/loop inner nodes, `custom-note` stickies, and modern multi-case if-else. Errors abort with exit `5`. Stale hashes are `VALIDATION_FAILED` and retryable. Omitting env vars keeps current draft values. |
-| **Dry-run** | `--dry-run` on `sync_draft` returns a structural diff without saving. |
+| **Dry-run** | `--dry-run` on `sync_draft` returns a structural diff without saving; `app.restore --dry-run` lists imports and name conflicts without writing to Dify. |
 | **Private URLs** | `http-request` nodes targeting private/loopback hosts warn (`PRIVATE_URL`). `yaml_url` imports to private hosts are rejected unless `DIFYWF_ALLOW_PRIVATE_URL=1`. |
 | **Audit log** | Every action appends to `~/.difywf/audit.jsonl` (nested secrets/graphs redacted, mode `0600`). |
 | **Auto-refresh** | Cookie sessions auto-refresh on 401 via the refresh-token cookie, with server-side rotation persisted. Console cookies cover run/stop/upload/deps/workspace; OpenAPI is fallback. |
@@ -406,9 +443,9 @@ See [`.env.example`](.env.example). Common knobs:
 ## Develop
 
 ```bash
-npm test            # 99 unit tests
+npm test            # 118 unit tests
 npm run typecheck   # tsc --noEmit
-npm run smoke:mcp   # MCP stdio smoke (172 tools, JSON-RPC handshake)
+npm run smoke:mcp   # MCP stdio smoke (174 tools, JSON-RPC handshake)
 npm run smoke:mcp:http   # MCP Streamable HTTP smoke (stateless POST /mcp)
 ```
 

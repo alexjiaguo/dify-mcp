@@ -23,7 +23,7 @@ test("app.import auto-confirms when import is pending", async () => {
       return { ok: true, data: { result: "success", app_id: "new-app" } };
     },
   };
-  const r = await find("app.import").run({ workspace_id: "w", yaml: "kind: app", confirm: true }, fakeCtx({ openapi: fake as never }));
+  const r = await find("app.import").run({ workspace_id: "w", yaml: "version: 0.7.0\nkind: app", confirm: true }, fakeCtx({ openapi: fake as never }));
   assert.ok(r.ok);
   if (r.ok) assert.equal((r.data as Record<string, unknown>).confirmed, true);
   assert.deepEqual(calls, ["import", "confirm:i1"]);
@@ -34,7 +34,7 @@ test("app.import skips confirm when import completes immediately", async () => {
     importDsl: async (): Promise<Result<unknown>> => ({ ok: true, data: { result: "success", app_id: "a1" } }),
     confirmImport: async (): Promise<Result<unknown>> => { throw new Error("should not confirm"); },
   };
-  const r = await find("app.import").run({ workspace_id: "w", yaml: "kind: app", confirm: true }, fakeCtx({ openapi: fake as never }));
+  const r = await find("app.import").run({ workspace_id: "w", yaml: "version: 0.7.0\nkind: app", confirm: true }, fakeCtx({ openapi: fake as never }));
   assert.ok(r.ok);
   if (r.ok) assert.equal((r.data as Record<string, unknown>).confirmed, false);
 });
@@ -52,12 +52,27 @@ test("app.import prefers console cookies and does not require workspace_id", asy
     },
   };
   const r = await find("app.import").run(
-    { yaml: "kind: app", confirm: true },
+    { yaml: "version: 0.7.0\nkind: app", confirm: true },
     fakeCtx({ openapi: null, console: fake as never }),
   );
   assert.ok(r.ok);
   if (r.ok) assert.equal((r.data as Record<string, unknown>).confirmed, true);
   assert.deepEqual(calls, ["import", "confirm:i1"]);
+});
+
+test("app.import rejects unsupported DSL versions", async () => {
+  const fake = {
+    importDsl: async (): Promise<Result<unknown>> => {
+      throw new Error("must not import");
+    },
+  };
+  await assert.rejects(
+    find("app.import").run(
+      { workspace_id: "w", yaml: "version: 0.6.0\nkind: app", confirm: true },
+      fakeCtx({ openapi: fake as never }),
+    ),
+    /DSL version 0\.6\.0 is unsupported/,
+  );
 });
 
 test("workflow.sync_draft dry_run returns a structural diff", async () => {

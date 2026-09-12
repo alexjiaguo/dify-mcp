@@ -169,6 +169,63 @@ function clientAny(ctx: ToolCtx): OpenapiClient | ConsoleClient {
   return c;
 }
 
+type AppRow = { id: string; name: string; mode?: string };
+
+const DSL_VERSION = "0.7.0";
+
+function assertDslVersion(yaml: string): void {
+  const match = /^version:[ \t]*(?:"([^"]+)"|'([^']+)'|([^\s#\r\n]+))[ \t]*(?:#.*)?$/m.exec(yaml);
+  const version = match?.[1] ?? match?.[2] ?? match?.[3];
+  if (version !== DSL_VERSION) {
+    throw new ToolError(
+      "DSL_VERSION_MISMATCH",
+      version
+        ? `DSL version ${version} is unsupported; expected ${DSL_VERSION}`
+        : `DSL version is missing; expected ${DSL_VERSION}`,
+    );
+  }
+}
+
+function resultRows(data: unknown): Record<string, unknown>[] {
+  const rows = Array.isArray(data)
+    ? data
+    : data && typeof data === "object"
+      ? (data as Record<string, unknown>).data ?? (data as Record<string, unknown>).items
+      : undefined;
+  if (!Array.isArray(rows)) return [];
+  return rows.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+}
+
+function appRow(row: Record<string, unknown>): AppRow | undefined {
+  const id = str(row.id);
+  const name = str(row.name);
+  if (!id || !name) return undefined;
+  return { id, name, mode: str(row.mode) };
+}
+
+async function listAllApps(ctx: ToolCtx): Promise<Result<AppRow[]>> {
+  const client = clientAny(ctx);
+  const rows: AppRow[] = [];
+  for (let page = 1; ; page++) {
+    const result = await client.listApps({ page, limit: 100 });
+    if (!result.ok) return result;
+    const pageRows = resultRows(result.data).flatMap((row) => {
+      const app = appRow(row);
+      return app ? [app] : [];
+    });
+    rows.push(...pageRows);
+    const payload = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
+    const hasMore = payload.has_more === true || payload.hasMore === true;
+    if (!hasMore) break;
+  }
+  return ok(rows);
+}
+
+function backupFilename(app: AppRow): string {
+  const safe = (value: string) => value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return `${safe(app.name).slice(0, 80) || "app"}-${safe(app.id) || "app"}.yml`;
+}
+
 const S = (desc: string) => ({ type: "string", description: desc });
 const O = (desc: string) => ({ type: "object", description: desc });
 const B = (desc: string) => ({ type: "boolean", description: desc });
@@ -178,7 +235,7 @@ export const tools: Tool[] = [
   {
     name: "agent.guide",
     summary: "Self-onboarding playbook for agents: golden path, node types, error codes, safety rules.",
-    schema: { type: "object", properties: { section: S("overview|quickstart|nodes|errors|safety|all") } },
+    schema: { type: "object", properties: { section: S("overview|quickstart|compatibility|nodes|errors|safety|all") } },
     run: async (args) => ok(guideText(typeof args.section === "string" ? args.section : undefined)),
   },
   {
@@ -354,7 +411,102 @@ export const tools: Tool[] = [
       if (includeSecret && args.confirm !== true) {
         return err("CONFIRM_REQUIRED", "include_secret=true exports credentials; pass confirm=true to proceed");
       }
-      return (clientAny(ctx)).exportDsl(req(args, "app_id"), includeSecret);
+      const result = await clientAny(ctx).exportDsl(req(args, "app_id"), includeSecret);
+      if (result.ok) assertDslVersion(result.data);
+      return result;
+    },
+  },
+  {
+    name: "app.backup",
+    summary: "Bulk-export app DSL files to a local backup directory. include_secret and overwrite require confirm=true.",
+    schema: {
+      type: "object",
+      properties: {
+        path: S("local backup directory"),
+        app_ids: { type: "array", items: { type: "string" }, description: "optional app id filter" },
+        mode: S("optional app mode filter"),
+        name: S("optional case-insensitive app name substring filter"),
+        limit: { type: "number", description: "maximum apps to back up" },
+        include_secret: B("include env-var secrets; requires confirm=true"),
+        overwrite: B("replace existing files; requires confirm=true"),
+        confirm: CONFIRM,
+      },
+      required: ["path"],
+    },
+    run: async (args, ctx) => {
+      const includeSecret = args.include_secret === true;
+      const overwrite = args.overwrite === true;
+      if ((includeSecret || overwrite) && args.confirm !== true) {
+        return err(
+          "CONFIRM_REQUIRED",
+          "include_secret=true and overwrite=true both require confirm=true (CLI: --yes)",
+        );
+      }
+      const dir = path.resolve(req(args, "path"));
+      if (fs.existsSync(dir) && !fs.statSync(dir).isDirectory()) {
+        return err("USAGE_ERROR", `backup path is not a directory: ${dir}`);
+      }
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+      const listed = await listAllApps(ctx);
+      if (!listed.ok) return listed;
+      let apps = listed.data;
+      const requestedIds = Array.isArray(args.app_ids)
+        ? args.app_ids.filter((id): id is string => typeof id === "string" && id.length > 0)
+        : [];
+      if (requestedIds.length) {
+        const requested = new Set(requestedIds);
+        apps = apps.filter((app) => requested.has(app.id));
+        const missing = requestedIds.filter((id) => !apps.some((app) => app.id === id));
+        if (missing.length) return err("NOT_FOUND", `app(s) not found: ${missing.join(", ")}`);
+      }
+      if (str(args.mode)) apps = apps.filter((app) => app.mode === str(args.mode));
+      if (str(args.name)) {
+        const needle = str(args.name)!.toLowerCase();
+        apps = apps.filter((app) => app.name.toLowerCase().includes(needle));
+      }
+      const limit = num(args.limit);
+      if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+        return err("USAGE_ERROR", "limit must be a positive integer");
+      }
+      if (limit !== undefined) apps = apps.slice(0, limit);
+
+      const files = apps.map((app) => ({ app, file: backupFilename(app) }));
+      if (!overwrite) {
+        const existing = files.filter(({ file }) => fs.existsSync(path.join(dir, file)));
+        if (fs.existsSync(path.join(dir, "manifest.json"))) existing.push({ app: { id: "manifest", name: "manifest" }, file: "manifest.json" });
+        if (existing.length) {
+          return err("USAGE_ERROR", `backup file(s) already exist; pass overwrite=true to replace: ${existing.map((x) => x.file).join(", ")}`);
+        }
+      }
+
+      const manifestFiles: Array<Record<string, unknown>> = [];
+      for (const { app, file } of files) {
+        const exported = await clientAny(ctx).exportDsl(app.id, includeSecret);
+        if (!exported.ok) return exported;
+        assertDslVersion(exported.data);
+        fs.writeFileSync(path.join(dir, file), exported.data, { mode: 0o600 });
+        try {
+          fs.chmodSync(path.join(dir, file), 0o600);
+        } catch {
+          // Windows and unusual filesystems may reject chmod; content is still written.
+        }
+        manifestFiles.push({ app_id: app.id, name: app.name, mode: app.mode ?? null, file });
+      }
+      const manifest = {
+        created_at: new Date().toISOString(),
+        base_url: ctx.cfg.baseUrl,
+        include_secret: includeSecret,
+        app_count: manifestFiles.length,
+        files: manifestFiles,
+      };
+      fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });
+      try {
+        fs.chmodSync(path.join(dir, "manifest.json"), 0o600);
+      } catch {
+        // Some filesystems reject chmod; the caller still gets a complete backup.
+      }
+      return ok({ backup_path: dir, app_count: manifestFiles.length, files: manifestFiles });
     },
   },
   {
@@ -741,7 +893,12 @@ export const tools: Tool[] = [
     schema: { type: "object", properties: { workspace_id: S("target workspace; required only for OpenAPI fallback"), yaml: S("DSL YAML content"), yaml_url: S("...or YAML URL"), name: S("override name"), description: S(""), confirm: CONFIRM }, required: ["confirm"] },
     run: async (a, ctx) => {
       const body: Record<string, unknown> = {};
-      if (str(a.yaml)) { body.mode = "yaml-content"; body.yaml_content = str(a.yaml); }
+      const yaml = str(a.yaml);
+      if (yaml) {
+        assertDslVersion(yaml);
+        body.mode = "yaml-content";
+        body.yaml_content = yaml;
+      }
       else if (str(a.yaml_url)) { body.mode = "yaml-url"; body.yaml_url = str(a.yaml_url); }
       else throw new ToolError("USAGE_ERROR", "pass yaml (content) or yaml_url");
       assertPublicYamlUrl(str(a.yaml_url));
@@ -773,6 +930,101 @@ export const tools: Tool[] = [
         return conf.ok ? ok({ imported: true, confirmed: true, ...(conf.data as Record<string, unknown> ?? {}) }) : conf;
       }
       return ok({ imported: true, confirmed: false, ...data });
+    },
+  },
+  {
+    name: "app.restore",
+    summary: "Import app DSL files from a local backup directory. Dry-run is safe; real restore requires confirm=true.",
+    schema: {
+      type: "object",
+      properties: {
+        path: S("local backup directory"),
+        workspace_id: S("target workspace; required only for OpenAPI fallback"),
+        on_conflict: { type: "string", enum: ["skip", "create"], description: "default skip; requires a difywf manifest" },
+        dry_run: B("list the restore plan without importing"),
+        confirm: CONFIRM,
+      },
+      required: ["path"],
+    },
+    run: async (args, ctx) => {
+      const dryRun = args.dry_run === true;
+      if (!dryRun && args.confirm !== true) {
+        return err("CONFIRM_REQUIRED", "app.restore creates apps; pass confirm=true (CLI: --yes) or use dry_run=true");
+      }
+      const onConflict = str(args.on_conflict) === "create" ? "create" : "skip";
+      const dir = path.resolve(req(args, "path"));
+      if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+        return err("USAGE_ERROR", `restore path is not a directory: ${dir}`);
+      }
+      const yamlFiles = fs.readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name))
+        .map((entry) => entry.name)
+        .sort();
+      if (!yamlFiles.length) return ok({ restore_path: dir, dry_run: dryRun, imported: [], skipped: [], failed: [] });
+
+      const manifestPath = path.join(dir, "manifest.json");
+      const manifestFiles: Array<Record<string, unknown>> = [];
+      let manifestFound = false;
+      if (fs.existsSync(manifestPath)) {
+        manifestFound = true;
+        try {
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+          if (Array.isArray(manifest.files)) {
+            for (const file of manifest.files) {
+              if (file && typeof file === "object") manifestFiles.push(file as Record<string, unknown>);
+            }
+          }
+        } catch {
+          return err("USAGE_ERROR", `invalid backup manifest: ${manifestPath}`);
+        }
+      }
+
+      const listed = await listAllApps(ctx);
+      if (!listed.ok) return listed;
+      const existingNames = new Set(listed.data.map((app) => app.name.toLowerCase()));
+      const imported: Array<Record<string, unknown>> = [];
+      const skipped: Array<Record<string, unknown>> = [];
+      const failed: Array<Record<string, unknown>> = [];
+
+      for (const file of yamlFiles) {
+        const yaml = fs.readFileSync(path.join(dir, file), "utf8");
+        assertDslVersion(yaml);
+        const meta = manifestFiles.find((item) => str(item.file) === file);
+        const name = str(meta?.name);
+        const conflict = !!name && existingNames.has(name.toLowerCase());
+        if (conflict && onConflict === "skip") {
+          skipped.push({ file, reason: "name_conflict", name });
+          continue;
+        }
+        if (dryRun) {
+          imported.push({ file, name: name ?? null, action: conflict ? "create_conflicting_name" : "create" });
+          continue;
+        }
+
+        const importTool = tools.find((tool) => tool.name === "app.import")!;
+        let result: Result<unknown>;
+        try {
+          result = await importTool.run({ yaml, workspace_id: str(args.workspace_id), confirm: true }, ctx);
+        } catch (e) {
+          if (!(e instanceof ToolError)) throw e;
+          failed.push({ file, name: name ?? null, error: { code: e.code, message: e.message, retryable: e.retryable } });
+          continue;
+        }
+        if (result.ok) {
+          const data = (result.data ?? {}) as Record<string, unknown>;
+          imported.push({ file, name: name ?? null, app_id: str(data.app_id) ?? null });
+        } else {
+          failed.push({ file, name: name ?? null, error: result.error });
+        }
+      }
+
+      const summary = { restore_path: dir, dry_run: dryRun, manifest_found: manifestFound, imported, skipped, failed };
+      if (failed.length) {
+        return err("SERVER_ERROR", `${failed.length} of ${yamlFiles.length} DSL import(s) failed`, {
+          details: summary,
+        });
+      }
+      return ok(summary);
     },
   },
   {

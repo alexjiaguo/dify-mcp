@@ -11,7 +11,9 @@ become underscores: \`workflow.sync_draft\` -> \`workflow_sync_draft\`). Both
 return the same contract: { "ok": bool, "data": ..., "error": { "code",
 "message", "retryable" } }. Parse this JSON; never scrape human text.
 
-Targets: Dify v1.x, DSL version 0.7.0, workflow engine graphon 0.6.0.
+Targets: dify-mcp 0.3.x supports Dify 1.17.x (cloud 1.17.0 live-verified)
+and 1.16.x, DSL version 0.7.0. Graphon is server-side: 0.7.0 on 1.17.x,
+0.6.0 on 1.16.x. Dify <=1.15.x and 0.x are unsupported.
 App modes: workflow | chatflow (advanced-chat) | chat | agent (agent-chat) | completion.
 
 Auth: the authoring surface (/console/api) uses cookie+CSRF, not Bearer.
@@ -45,6 +47,27 @@ If sync_draft fails with a stale-hash error: refetch workflow.get_draft and
 retry with the fresh hash (VALIDATION_FAILED, retryable=true). Omitting
 environment_variables / conversation_variables keeps the current draft
 values — it does not wipe secrets.`,
+
+  compatibility: `# Compatibility contract
+dify-mcp 0.3.x:
+
+| Dify | DSL | Graphon | Support |
+|---|---|---|---|
+| 1.17.x | 0.7.0 | 0.7.0 | Supported; cloud 1.17.0 live-verified |
+| 1.16.x | 0.7.0 | 0.6.0 | Best-effort; not live-verified |
+| <=1.15.x and 0.x | varies | varies | Unsupported (no legacy adapter) |
+
+Check the Dify response header \`x-version\` or the instance deployment before
+reporting compatibility bugs. If a DSL export/import reports a version other
+than 0.7.0, stop and report \`DSL_VERSION_MISMATCH\` instead of editing the DSL.
+
+Local migration path:
+1. On the source instance: \`app.backup\` (or CLI \`difywf app backup <dir>\`).
+2. Point auth/base URL at the target instance.
+3. \`app.restore\` with dry_run=true, review skipped conflicts, then confirm=true.
+
+Backups default to include_secret=false. Use include_secret=true only when the
+backup location is encrypted or otherwise restricted; it requires confirm=true.`,
 
   nodes: `# Node types (fetch full schema per type via workflow.node_defaults)
 start, end, answer, llm, knowledge-retrieval, question-classifier, if-else,
@@ -84,6 +107,8 @@ RATE_LIMITED(9)/SERVER_ERROR(10)/NETWORK_ERROR(11) — retryable, back off.`,
   yaml_url imports to private hosts are rejected unless DIFYWF_ALLOW_PRIVATE_URL=1.
 - File uploads take {name, content_b64, mime?} and are sent as multipart.
 - app.export include_secret=true requires confirm=true.
+- app.backup include_secret=true and overwrite=true require confirm=true.
+  app.restore real imports require confirm=true; always run dry_run=true first.
 - Never exfiltrate secrets: env/conversation variables and provider credentials
   may contain keys. Do not copy them into prompts, logs, or other apps.
 - Every action is written to ~/.difywf/audit.jsonl (nested secrets redacted, mode 0600).`,
