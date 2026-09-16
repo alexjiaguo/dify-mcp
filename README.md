@@ -14,7 +14,7 @@ Dify workflows autonomously — everything a human can do in the UI, now scripta
 [![174 Tools](https://img.shields.io/badge/tools-174-purple.svg)](#tools)
 [![Live Verified](https://img.shields.io/badge/live--verified-authoring%20loop-brightgreen.svg)](#live-verified)
 
-Works with **Claude Code** · **Codex** · **Gemini CLI** · **Cursor** · **Cline** · **Windsurf** · **Roo Code** · **Continue** · **Aider** · **Zed** — and any other MCP-compatible or shell-capable agent.
+Works with **24 popular AI agents** — Claude Code, Codex, Gemini CLI, Cursor, Cline, Windsurf, Roo Code, Continue, Zed, Aider, OpenCode, Antigravity, GitHub Copilot, Goose, Trae, Kilo Code, Warp, Crush, Droid, Amp, OpenHands, Cody, Augment, and Amazon Q Developer — plus any other MCP-compatible or shell-capable agent.
 
 </div>
 
@@ -65,6 +65,20 @@ server. Most popular agents do both:
 | [Continue](https://github.com/continuedev/continue) | ✅ | ✅ | `experimental.mcpServer` in `config.json` |
 | [Zed](https://zed.dev) | ✅ | ✅ | `context_servers` in `~/.config/zed/settings.json` |
 | [Aider](https://github.com/Aider-AI/aider) | - | ✅ | Run `difywf` commands directly in chat |
+| [OpenCode](https://github.com/sst/opencode) | ✅ | ✅ | Standard MCP config |
+| [Antigravity](https://antigravity.google) | ✅ | ✅ | Standard MCP config |
+| [GitHub Copilot](https://github.com/features/copilot) | ✅ | ✅ | Standard MCP config |
+| [Goose](https://github.com/block/goose) | ✅ | ✅ | Standard MCP config |
+| [Trae](https://www.trae.ai) | ✅ | ✅ | Standard MCP config |
+| [Kilo Code](https://kilocode.ai) | ✅ | ✅ | Standard MCP config |
+| [Warp](https://www.warp.dev) | ✅ | ✅ | Standard MCP config |
+| [Crush](https://github.com/charmbracelet/crush) | ✅ | ✅ | Standard MCP config |
+| [Droid](https://github.com/droid-ai/droid) | ✅ | ✅ | Standard MCP config |
+| [Amp](https://github.com/sourcegraph/amp) | ✅ | ✅ | Standard MCP config |
+| [OpenHands](https://github.com/All-Hands-AI/OpenHands) | ✅ | ✅ | Standard MCP config |
+| [Cody](https://sourcegraph.com/cody) | ✅ | ✅ | Standard MCP config |
+| [Augment](https://www.augmentcode.com) | ✅ | ✅ | Standard MCP config |
+| [Amazon Q Developer](https://aws.amazon.com/q/developer/) | ✅ | ✅ | Standard MCP config |
 
 Don't see your agent? If it supports MCP or can run shell commands, it works. The
 [connect section](#connect-your-agent-mcp) below has copy-paste configs for each host.
@@ -332,6 +346,36 @@ Aider doesn't support MCP, but it can run shell commands. Just use the CLI direc
 ```
 /run difywf app list
 /run difywf wf draft sync <app-id> --graph graph.json
+```
+</details>
+
+<details>
+<summary><b>Other popular MCP agents</b> — OpenCode, Antigravity, GitHub Copilot, Goose, Trae, Kilo Code, Warp, Crush, Droid, Amp, OpenHands, Cody, Augment, Amazon Q Developer</summary>
+
+Most modern agents expose a standard MCP client setting. Use the JSON shape below in your agent's MCP configuration, or the TOML shape if your agent follows the Codex-style format:
+
+```json
+{
+  "mcpServers": {
+    "dify": {
+      "command": "difywf",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+```toml
+[mcp_servers.dify]
+command = "difywf"
+args = ["mcp", "serve"]
+```
+
+If your agent only runs shell commands, use the CLI directly:
+
+```bash
+difywf agent guide
+difywf app list
 ```
 </details>
 
