@@ -65,20 +65,20 @@ server. Most popular agents do both:
 | [Continue](https://github.com/continuedev/continue) | ✅ | ✅ | `experimental.mcpServer` in `config.json` |
 | [Zed](https://zed.dev) | ✅ | ✅ | `context_servers` in `~/.config/zed/settings.json` |
 | [Aider](https://github.com/Aider-AI/aider) | - | ✅ | Run `difywf` commands directly in chat |
-| [OpenCode](https://github.com/sst/opencode) | ✅ | ✅ | Standard MCP config |
-| [Antigravity](https://antigravity.google) | ✅ | ✅ | Standard MCP config |
-| [GitHub Copilot](https://github.com/features/copilot) | ✅ | ✅ | Standard MCP config |
-| [Goose](https://github.com/block/goose) | ✅ | ✅ | Standard MCP config |
-| [Trae](https://www.trae.ai) | ✅ | ✅ | Standard MCP config |
-| [Kilo Code](https://kilocode.ai) | ✅ | ✅ | Standard MCP config |
-| [Warp](https://www.warp.dev) | ✅ | ✅ | Standard MCP config |
-| [Crush](https://github.com/charmbracelet/crush) | ✅ | ✅ | Standard MCP config |
-| [Droid](https://github.com/droid-ai/droid) | ✅ | ✅ | Standard MCP config |
-| [Amp](https://github.com/sourcegraph/amp) | ✅ | ✅ | Standard MCP config |
-| [OpenHands](https://github.com/All-Hands-AI/OpenHands) | ✅ | ✅ | Standard MCP config |
-| [Cody](https://sourcegraph.com/cody) | ✅ | ✅ | Standard MCP config |
-| [Augment](https://www.augmentcode.com) | ✅ | ✅ | Standard MCP config |
-| [Amazon Q Developer](https://aws.amazon.com/q/developer/) | ✅ | ✅ | Standard MCP config |
+| [OpenCode](https://github.com/sst/opencode) | ✅ | ✅ | `mcp.dify` in `opencode.json` |
+| [Antigravity](https://antigravity.google) | ✅ | ✅ | Common `mcpServers` JSON |
+| [GitHub Copilot](https://github.com/features/copilot) | ✅ | ✅ | `servers.dify` in `.mcp.json` |
+| [Goose](https://github.com/block/goose) | ✅ | ✅ | `extensions.dify` in `config.yaml` |
+| [Trae](https://www.trae.ai) | ✅ | ✅ | Common `mcpServers` JSON |
+| [Kilo Code](https://kilocode.ai) | ✅ | ✅ | Common `mcpServers` JSON |
+| [Warp](https://www.warp.dev) | ✅ | ✅ | Common `mcpServers` JSON |
+| [Crush](https://github.com/charmbracelet/crush) | ✅ | ✅ | `mcp add dify --command difywf --args mcp serve` |
+| [Droid](https://github.com/droid-ai/droid) | ✅ | ✅ | Common `mcpServers` JSON |
+| [Amp](https://github.com/sourcegraph/amp) | ✅ | ✅ | Common `mcpServers` JSON |
+| [OpenHands](https://github.com/All-Hands-AI/OpenHands) | ✅ | ✅ | `mcpServers.dify` in `~/.openhands/mcp.json` |
+| [Cody](https://sourcegraph.com/cody) | ✅ | ✅ | Common `mcpServers` JSON |
+| [Augment](https://www.augmentcode.com) | ✅ | ✅ | Common `mcpServers` JSON |
+| [Amazon Q Developer](https://aws.amazon.com/q/developer/) | ✅ | ✅ | Common `mcpServers` JSON |
 
 Don't see your agent? If it supports MCP or can run shell commands, it works. The
 [connect section](#connect-your-agent-mcp) below has copy-paste configs for each host.
@@ -268,6 +268,10 @@ when you need a dedicated backup service.
 
 Same binary, same 174 tools. Copy-paste the config for your host:
 
+There is no single universal MCP filename. What every host needs is the same
+local stdio launch command: `difywf mcp serve`. The examples below show the
+wrapper your host expects.
+
 <details>
 <summary><b>Claude Code</b></summary>
 
@@ -350,9 +354,78 @@ Aider doesn't support MCP, but it can run shell commands. Just use the CLI direc
 </details>
 
 <details>
-<summary><b>Other popular MCP agents</b> — OpenCode, Antigravity, GitHub Copilot, Goose, Trae, Kilo Code, Warp, Crush, Droid, Amp, OpenHands, Cody, Augment, Amazon Q Developer</summary>
+<summary><b>OpenCode</b> (<code>opencode.json</code>)</summary>
 
-Most modern agents expose a standard MCP client setting. Use the JSON shape below in your agent's MCP configuration, or the TOML shape if your agent follows the Codex-style format:
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "dify": {
+      "type": "local",
+      "command": ["difywf", "mcp", "serve"],
+      "enabled": true
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>GitHub Copilot</b> (<code>.mcp.json</code> or <code>~/.copilot/mcp-config.json</code>)</summary>
+
+```json
+{
+  "servers": {
+    "dify": {
+      "command": "difywf",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Goose</b> (<code>~/.config/goose/config.yaml</code>)</summary>
+
+```yaml
+extensions:
+  dify:
+    type: stdio
+    name: dify
+    enabled: true
+    cmd: difywf
+    args: ["mcp", "serve"]
+```
+</details>
+
+<details>
+<summary><b>Crush</b> (<code>~/.config/crush/crushrc</code> or <code>./.crushrc</code>)</summary>
+
+```bash
+mcp add dify --command difywf --args mcp serve
+```
+</details>
+
+<details>
+<summary><b>OpenHands</b> (<code>~/.openhands/mcp.json</code>)</summary>
+
+```json
+{
+  "mcpServers": {
+    "dify": {
+      "command": "difywf",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Other popular MCP agents</b> — Antigravity, Trae, Kilo Code, Warp, Droid, Amp, Cody, Augment, Amazon Q Developer</summary>
+
+Most modern agents expose a local stdio MCP setting that uses the `mcpServers` JSON shape below. If your agent follows the Codex-style TOML format, use the second example:
 
 ```json
 {
