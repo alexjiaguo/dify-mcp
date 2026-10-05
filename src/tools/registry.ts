@@ -1977,12 +1977,12 @@ export const tools: Tool[] = [
     confirm: true,
     schema: { type: "object", properties: { yaml: S("DSL YAML content"), yaml_url: S("...or YAML URL"), name: S("override name"), confirm: CONFIRM }, required: ["confirm"] },
     run: async (a, ctx) => {
-      const c = needClient(ctx, "console") as ConsoleClient;
       const body: Record<string, unknown> = {};
       if (str(a.yaml)) { body.mode = "yaml-content"; body.yaml_content = str(a.yaml); }
       else if (str(a.yaml_url)) { body.mode = "yaml-url"; body.yaml_url = str(a.yaml_url); }
       else throw new ToolError("USAGE_ERROR", "pass yaml (content) or yaml_url");
       assertPublicYamlUrl(str(a.yaml_url));
+      const c = needClient(ctx, "console") as ConsoleClient;
       if (str(a.name)) body.name = str(a.name);
       const imp = await c.importSnippet(body);
       if (!imp.ok) return imp;
@@ -2247,6 +2247,280 @@ export const tools: Tool[] = [
     run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).agentSandboxUpload(req(a, "agent_id"), obj(a, "file")),
   },
 
+  // --- workspace MCP tool providers (Tools → MCP) ---
+  {
+    name: "mcp.list",
+    summary: "List connected workspace MCP tool providers (Tools → MCP).",
+    needs: "console",
+    schema: { type: "object", properties: {} },
+    run: async (_a, ctx) => (needClient(ctx, "console") as ConsoleClient).listMcpProviders(),
+  },
+  {
+    name: "mcp.get",
+    summary: "Get a workspace MCP tool provider by provider_id.",
+    needs: "console",
+    schema: { type: "object", properties: { provider_id: S("MCP provider id") }, required: ["provider_id"] },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).getMcpProvider(req(a, "provider_id")),
+  },
+  {
+    name: "mcp.create",
+    summary: "Connect an external MCP server to Dify (Tools → MCP). Body: {name, server_url, server_identifier, ...}.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        name: S("display name"),
+        server_url: S("MCP server SSE/HTTP URL"),
+        server_identifier: S("unique server identifier"),
+        icon: S("emoji icon"),
+        icon_type: S("icon type"),
+        icon_background: S("icon background"),
+        headers: O("custom headers map"),
+        configuration: O("timeout / sse_read_timeout config"),
+        authentication: O("authentication configuration"),
+        body: O("full create payload override"),
+      },
+    },
+    run: async (a, ctx) => {
+      const c = needClient(ctx, "console") as ConsoleClient;
+      if (a.body && typeof a.body === "object") return c.createMcpProvider(a.body as Record<string, unknown>);
+      const name = req(a, "name");
+      const server_url = req(a, "server_url");
+      const server_identifier = req(a, "server_identifier");
+      const payload: Record<string, unknown> = { name, server_url, server_identifier };
+      if (str(a.icon)) payload.icon = str(a.icon);
+      if (str(a.icon_type)) payload.icon_type = str(a.icon_type);
+      if (str(a.icon_background)) payload.icon_background = str(a.icon_background);
+      if (a.headers && typeof a.headers === "object") payload.headers = a.headers as Record<string, unknown>;
+      if (a.configuration && typeof a.configuration === "object") payload.configuration = a.configuration as Record<string, unknown>;
+      if (a.authentication && typeof a.authentication === "object") payload.authentication = a.authentication as Record<string, unknown>;
+      return c.createMcpProvider(payload);
+    },
+  },
+  {
+    name: "mcp.update",
+    summary: "Update an existing MCP tool provider. Body: {provider_id, name, server_url, ...}.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        provider_id: S("MCP provider id"),
+        name: S("display name"),
+        server_url: S("MCP server SSE/HTTP URL"),
+        server_identifier: S("unique server identifier"),
+        icon: S("emoji icon"),
+        icon_type: S("icon type"),
+        icon_background: S("icon background"),
+        headers: O("custom headers map"),
+        configuration: O("timeout / sse_read_timeout config"),
+        authentication: O("authentication configuration"),
+        body: O("full update payload override"),
+      },
+      required: ["provider_id"],
+    },
+    run: async (a, ctx) => {
+      const c = needClient(ctx, "console") as ConsoleClient;
+      if (a.body && typeof a.body === "object") {
+        const b = { ...(a.body as Record<string, unknown>) };
+        if (!b.provider_id) b.provider_id = req(a, "provider_id");
+        return c.updateMcpProvider(b);
+      }
+      const provider_id = req(a, "provider_id");
+      const payload: Record<string, unknown> = { provider_id };
+      if (str(a.name)) payload.name = str(a.name);
+      if (str(a.server_url)) payload.server_url = str(a.server_url);
+      if (str(a.server_identifier)) payload.server_identifier = str(a.server_identifier);
+      if (str(a.icon)) payload.icon = str(a.icon);
+      if (str(a.icon_type)) payload.icon_type = str(a.icon_type);
+      if (str(a.icon_background)) payload.icon_background = str(a.icon_background);
+      if (a.headers && typeof a.headers === "object") payload.headers = a.headers as Record<string, unknown>;
+      if (a.configuration && typeof a.configuration === "object") payload.configuration = a.configuration as Record<string, unknown>;
+      if (a.authentication && typeof a.authentication === "object") payload.authentication = a.authentication as Record<string, unknown>;
+      return c.updateMcpProvider(payload);
+    },
+  },
+  {
+    name: "mcp.delete",
+    summary: "Delete a workspace MCP tool provider. confirm=true required.",
+    needs: "console",
+    confirm: true,
+    schema: { type: "object", properties: { provider_id: S("MCP provider id"), confirm: CONFIRM }, required: ["provider_id", "confirm"] },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).deleteMcpProvider(req(a, "provider_id")),
+  },
+  {
+    name: "mcp.refresh_tools",
+    summary: "Refresh tools list from a connected MCP server.",
+    needs: "console",
+    schema: { type: "object", properties: { provider_id: S("MCP provider id") }, required: ["provider_id"] },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).refreshMcpProviderTools(req(a, "provider_id")),
+  },
+
+  // --- app MCP server access point (App → Access Point → MCP Server) ---
+  {
+    name: "app.mcp_server_get",
+    summary: "Get the MCP Server endpoint configuration and URL for a Dify app.",
+    needs: "console",
+    schema: { type: "object", properties: { app_id: S("app id") }, required: ["app_id"] },
+    run: async (a, ctx) => {
+      const c = needClient(ctx, "console") as ConsoleClient;
+      const res = await c.getAppMcpServer(req(a, "app_id"));
+      if (!res.ok) return res;
+      const d = (res.data ?? {}) as Record<string, unknown>;
+      const serverCode = str(d.server_code);
+      const base = ctx.cfg.baseUrl || "https://cloud.dify.ai";
+      const url = serverCode ? `${base.replace(/\/+$/, "")}/mcp/server/${serverCode}/mcp` : undefined;
+      return ok({ ...d, url });
+    },
+  },
+  {
+    name: "app.mcp_server_set",
+    summary: "Create or update the MCP Server configuration for an app (upsert).",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        app_id: S("app id"),
+        description: S("server description"),
+        parameters: O("server parameters config"),
+        status: S("server status: active or inactive"),
+        body: O("override payload"),
+      },
+      required: ["app_id"],
+    },
+    run: async (a, ctx) => {
+      const c = needClient(ctx, "console") as ConsoleClient;
+      const appId = req(a, "app_id");
+      const existing = await c.getAppMcpServer(appId);
+      const payload: Record<string, unknown> = a.body && typeof a.body === "object" ? { ...(a.body as Record<string, unknown>) } : {};
+      if (str(a.description)) payload.description = str(a.description);
+      if (a.parameters && typeof a.parameters === "object") payload.parameters = a.parameters;
+      if (!payload.parameters) payload.parameters = {};
+      if (str(a.status)) payload.status = str(a.status);
+
+      if (existing.ok && existing.data && typeof existing.data === "object" && (existing.data as Record<string, unknown>).id) {
+        payload.id = (existing.data as Record<string, unknown>).id;
+        const res = await c.updateAppMcpServer(appId, payload);
+        if (!res.ok) return res;
+      } else {
+        const res = await c.createAppMcpServer(appId, payload);
+        if (!res.ok) return res;
+      }
+      const refreshed = await c.getAppMcpServer(appId);
+      if (!refreshed.ok) return refreshed;
+      const d = (refreshed.data ?? {}) as Record<string, unknown>;
+      const serverCode = str(d.server_code);
+      const base = ctx.cfg.baseUrl || "https://cloud.dify.ai";
+      const url = serverCode ? `${base.replace(/\/+$/, "")}/mcp/server/${serverCode}/mcp` : undefined;
+      return ok({ ...d, url });
+    },
+  },
+  {
+    name: "app.mcp_server_rotate",
+    summary: "Regenerate server code/URL for an app's MCP server endpoint. Breaks existing clients. confirm=true required.",
+    needs: "console",
+    confirm: true,
+    schema: { type: "object", properties: { app_id: S("app id"), confirm: CONFIRM }, required: ["app_id", "confirm"] },
+    run: async (a, ctx) => {
+      const c = needClient(ctx, "console") as ConsoleClient;
+      const appId = req(a, "app_id");
+      const res = await c.refreshAppMcpServer(appId);
+      if (!res.ok) return res;
+      const d = (res.data ?? {}) as Record<string, unknown>;
+      const serverCode = str(d.server_code);
+      const base = ctx.cfg.baseUrl || "https://cloud.dify.ai";
+      const url = serverCode ? `${base.replace(/\/+$/, "")}/mcp/server/${serverCode}/mcp` : undefined;
+      return ok({ ...d, url });
+    },
+  },
+
+  // --- workspace skills (Skills) ---
+  {
+    name: "skill.list",
+    summary: "List workspace-level skills. Query: {page?, limit?, keyword?, tag?}.",
+    needs: "console",
+    schema: { type: "object", properties: { page: { type: "number", description: "page number" }, limit: { type: "number", description: "items per page" }, keyword: S("keyword"), tag: S("tag") } },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).listSkills({
+      page: num(a.page),
+      limit: num(a.limit),
+      keyword: str(a.keyword),
+      tag: str(a.tag),
+    }),
+  },
+  {
+    name: "skill.get",
+    summary: "Get a workspace skill by skill_id.",
+    needs: "console",
+    schema: { type: "object", properties: { skill_id: S("skill id") }, required: ["skill_id"] },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).getSkill(req(a, "skill_id")),
+  },
+  {
+    name: "skill.versions",
+    summary: "List published versions for a workspace skill.",
+    needs: "console",
+    schema: { type: "object", properties: { skill_id: S("skill id") }, required: ["skill_id"] },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).listSkillVersions(req(a, "skill_id")),
+  },
+  {
+    name: "skill.references",
+    summary: "List agents and workflows referencing a workspace skill.",
+    needs: "console",
+    schema: { type: "object", properties: { skill_id: S("skill id") }, required: ["skill_id"] },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).getSkillReferences(req(a, "skill_id")),
+  },
+  {
+    name: "skill.import",
+    summary: "Import a workspace skill package (.zip). Pass file payload {name, content_b64, mime?}.",
+    needs: "console",
+    schema: { type: "object", properties: { file: O("file payload {name, content_b64, mime?}"), body: O("override payload") } },
+    run: async (a, ctx) => {
+      const c = needClient(ctx, "console") as ConsoleClient;
+      if (a.body && typeof a.body === "object") return c.importSkill(a.body as Record<string, unknown>);
+      if (a.file && typeof a.file === "object") return c.importSkill(a.file as Record<string, unknown>);
+      throw new ToolError("USAGE_ERROR", "pass file payload {name, content_b64, mime?} or body");
+    },
+  },
+  {
+    name: "skill.publish",
+    summary: "Publish a draft version of a workspace skill. Body: {publish_note?}.",
+    needs: "console",
+    schema: { type: "object", properties: { skill_id: S("skill id"), publish_note: S("release notes"), body: O("publish body") }, required: ["skill_id"] },
+    run: async (a, ctx) => {
+      const c = needClient(ctx, "console") as ConsoleClient;
+      const body = a.body && typeof a.body === "object" ? (a.body as Record<string, unknown>) : (str(a.publish_note) ? { publish_note: str(a.publish_note) } : {});
+      return c.publishSkill(req(a, "skill_id"), body);
+    },
+  },
+  {
+    name: "skill.delete",
+    summary: "Delete a workspace skill. confirm=true required.",
+    needs: "console",
+    confirm: true,
+    schema: { type: "object", properties: { skill_id: S("skill id"), confirmation_name: S("skill name confirmation if required"), confirm: CONFIRM }, required: ["skill_id", "confirm"] },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).deleteSkill(req(a, "skill_id"), str(a.confirmation_name)),
+  },
+  {
+    name: "skill.agent_bindings",
+    summary: "List workspace skills bound to an Agent app.",
+    needs: "console",
+    schema: { type: "object", properties: { agent_id: S("agent app id") }, required: ["agent_id"] },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).getAgentSkillBindings(req(a, "agent_id")),
+  },
+  {
+    name: "skill.set_agent_bindings",
+    summary: "Replace all workspace skill bindings for an Agent app. confirm=true required.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: { agent_id: S("agent app id"), skill_ids: { type: "array", items: { type: "string" }, description: "ordered skill IDs" }, confirm: CONFIRM },
+      required: ["agent_id", "skill_ids", "confirm"],
+    },
+    run: async (a, ctx) => {
+      const c = needClient(ctx, "console") as ConsoleClient;
+      const ids = Array.isArray(a.skill_ids) ? (a.skill_ids as unknown[]).map(String).filter(Boolean) : [];
+      return c.replaceAgentSkillBindings(req(a, "agent_id"), ids);
+    },
+  },
 ];
 
 export async function runTool(tool: Tool, args: Record<string, unknown>, flags: Flags): Promise<Result<unknown>> {

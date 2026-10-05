@@ -11,7 +11,7 @@ become underscores: \`workflow.sync_draft\` -> \`workflow_sync_draft\`). Both
 return the same contract: { "ok": bool, "data": ..., "error": { "code",
 "message", "retryable" } }. Parse this JSON; never scrape human text.
 
-Targets: dify-mcp 0.3.x supports Dify 1.17.x (cloud 1.17.0 live-verified)
+Targets: dify-mcp 0.4.x supports Dify 1.17.x (cloud 1.17.0 live-verified; 1.17.1 offline-verified)
 and 1.16.x, DSL version 0.7.0. Graphon is server-side: 0.7.0 on 1.17.x,
 0.6.0 on 1.16.x. Dify <=1.15.x and 0.x are unsupported.
 App modes: workflow | chatflow (advanced-chat) | chat | agent (agent-chat) | completion.
@@ -49,11 +49,11 @@ environment_variables / conversation_variables keeps the current draft
 values — it does not wipe secrets.`,
 
   compatibility: `# Compatibility contract
-dify-mcp 0.3.x:
+dify-mcp 0.4.x:
 
 | Dify | DSL | Graphon | Support |
 |---|---|---|---|
-| 1.17.x | 0.7.0 | 0.7.0 | Supported; cloud 1.17.0 live-verified |
+| 1.17.x | 0.7.0 | 0.7.0 | Supported; cloud 1.17.0 live-verified; 1.17.1 offline-verified |
 | 1.16.x | 0.7.0 | 0.6.0 | Best-effort; not live-verified |
 | <=1.15.x and 0.x | varies | varies | Unsupported (no legacy adapter) |
 
@@ -135,6 +135,12 @@ Beyond app workflows, difywf drives the rest of the Dify console surface:
   info/files/read/upload. Multipart uploads (annotation batch_import, agent
   skill/file/sandbox uploads) take a file payload object {name, content_b64, mime?}
   sent as multipart FormData.
+- Connected MCP tools (mcp.*): list/get/create/update/delete/refresh_tools external
+  HTTP MCP servers inside Dify (Tools → MCP).
+- App MCP Server endpoints (app.mcp_server_*): get endpoint URL, set (upsert)
+  configuration/parameters, or rotate server code (breaks existing clients; confirm-gated).
+- Workspace Skills (skill.*): list/get/versions/references, import (.zip multipart),
+  publish, delete (confirm-gated), and get/replace agent skill bindings.
 
 MCP hosts that pass a progressToken in tools/call _meta receive
 notifications/progress while SSE runs (draft/run/chat) stream events.

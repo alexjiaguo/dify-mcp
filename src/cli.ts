@@ -8,7 +8,7 @@ import { resolveConfig, maskToken } from "./core/config.ts";
 import { consoleLogin, deviceLoginFlow, parseAuthCookiesFromInput, storeCookies, storeToken } from "./core/auth.ts";
 import { runTool, tools } from "./tools/registry.ts";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 
 const NS_ALIASES: Record<string, string> = {
   wf: "workflow",
@@ -75,6 +75,10 @@ const POSITIONALS: Record<string, string[]> = {
   "agent.drive_files": ["app_id"], "agent.drive_skills": ["app_id"], "agent.drive_skill_inspect": ["app_id", "skill_path"],
   "agent.drive_preview": ["app_id"], "agent.drive_download": ["app_id"],
   "agent.sandbox_info": ["agent_id"], "agent.sandbox_files": ["agent_id"], "agent.sandbox_read": ["agent_id"], "agent.sandbox_upload": ["agent_id"],
+  "mcp.get": ["provider_id"], "mcp.update": ["provider_id"], "mcp.delete": ["provider_id"], "mcp.refresh_tools": ["provider_id"],
+  "app.mcp_server_get": ["app_id"], "app.mcp_server_set": ["app_id"], "app.mcp_server_rotate": ["app_id"],
+  "skill.get": ["skill_id"], "skill.versions": ["skill_id"], "skill.references": ["skill_id"], "skill.publish": ["skill_id"], "skill.delete": ["skill_id"],
+  "skill.agent_bindings": ["agent_id"], "skill.set_agent_bindings": ["agent_id"],
   "agent.guide": ["section"],
 };
 const CONTROL_FLAGS = new Set([
@@ -144,11 +148,14 @@ export async function main(): Promise<void> {
   if (positional[0] === "auth") return authMain(positional.slice(1), flags);
   if (positional[0] === "mcp") {
     const sub = positional[1];
-    if (sub !== undefined && sub !== "serve") {
-      return finish(err("USAGE_ERROR", `unknown mcp subcommand '${sub}'. Use: difywf mcp serve [--http]`), flags);
+    if (sub === "serve" || sub === undefined) {
+      await import("./mcp.ts");
+      return;
     }
-    await import("./mcp.ts");
-    return;
+    const hasTool = tools.some((t) => t.name.startsWith("mcp.") && t.name.slice(4) === sub.replaceAll("-", "_"));
+    if (!hasTool) {
+      return finish(err("USAGE_ERROR", `unknown mcp subcommand '${sub}'. Use: difywf mcp serve [--http] or difywf mcp <list|get|create|update|delete|refresh_tools>`), flags);
+    }
   }
 
   const ns = NS_ALIASES[positional[0]] ?? positional[0];

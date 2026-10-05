@@ -18,7 +18,7 @@ const fakeCtx = (overrides: Partial<ToolCtx> = {}): ToolCtx => ({
 
 test("agent guide exposes the Dify compatibility contract", () => {
   const text = guideText("compatibility");
-  assert.match(text, /dify-mcp 0\.3\.x/);
+  assert.match(text, /dify-mcp 0\.[34]\.x/);
   assert.match(text, /1\.17\.x/);
   assert.match(text, /1\.16\.x/);
   assert.match(text, /Unsupported \(no legacy adapter\)/);

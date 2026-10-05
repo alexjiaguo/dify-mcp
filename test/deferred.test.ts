@@ -13,7 +13,7 @@ const fakeCtx = (overrides: Partial<ToolCtx> = {}): ToolCtx => ({
 
 test("registry tool names are unique and stay above the authoring surface floor", () => {
   const names = tools.map((t) => t.name);
-  assert.ok(names.length >= 170, `expected >=170 tools, got ${names.length}`);
+  assert.ok(names.length >= 190, `expected >=190 tools, got ${names.length}`);
   assert.equal(new Set(names).size, names.length);
 });
 
@@ -154,4 +154,7 @@ test("agent.guide 'more' section lists the new surfaces", async () => {
   assert.ok(text.includes("Customized snippets"), "more section missing snippets");
   assert.ok(text.includes("Agent config / drive / sandbox"), "more section missing agent");
   assert.ok(text.includes("notifications/progress"), "more section missing MCP progress");
+  assert.ok(text.includes("Connected MCP tools"), "more section missing connected MCP tools");
+  assert.ok(text.includes("App MCP Server endpoints"), "more section missing app MCP endpoints");
+  assert.ok(text.includes("Workspace Skills"), "more section missing workspace skills");
 });

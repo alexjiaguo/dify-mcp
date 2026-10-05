@@ -836,6 +836,77 @@ export class ConsoleClient {
       body: isFilePayload(body) ? toFormData(body) : body,
     });
   }
+
+  // --- workspace MCP tool providers (Tools → MCP) ---
+  listMcpProviders(): Promise<Result<unknown>> {
+    return this.call("workspaces/current/tools/mcp");
+  }
+  getMcpProvider(providerId: string): Promise<Result<unknown>> {
+    return this.call(`workspaces/current/tool-provider/mcp/tools/${providerId}`);
+  }
+  createMcpProvider(body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call("workspaces/current/tool-provider/mcp", { body });
+  }
+  updateMcpProvider(body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call("workspaces/current/tool-provider/mcp", { method: "PUT", body });
+  }
+  deleteMcpProvider(providerId: string): Promise<Result<unknown>> {
+    return this.call("workspaces/current/tool-provider/mcp", { method: "DELETE", body: { provider_id: providerId } });
+  }
+  refreshMcpProviderTools(providerId: string): Promise<Result<unknown>> {
+    return this.call(`workspaces/current/tool-provider/mcp/update/${providerId}`);
+  }
+
+  // --- app MCP server access point (App → Access Point → MCP Server) ---
+  getAppMcpServer(appId: string): Promise<Result<unknown>> {
+    return this.call(`apps/${appId}/server`);
+  }
+  createAppMcpServer(appId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call(`apps/${appId}/server`, { body });
+  }
+  updateAppMcpServer(appId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call(`apps/${appId}/server`, { method: "PUT", body });
+  }
+  refreshAppMcpServer(appId: string): Promise<Result<unknown>> {
+    return this.call(`apps/${appId}/server/refresh`, { body: {} });
+  }
+
+  // --- workspace skills (Skills) ---
+  listSkills(q?: { page?: number; limit?: number; keyword?: string; tag?: string }): Promise<Result<unknown>> {
+    return this.call("workspaces/current/skills", { query: q });
+  }
+  getSkill(skillId: string): Promise<Result<unknown>> {
+    return this.call(`workspaces/current/skills/${skillId}`);
+  }
+  listSkillVersions(skillId: string): Promise<Result<unknown>> {
+    return this.call(`workspaces/current/skills/${skillId}/versions`);
+  }
+  getSkillReferences(skillId: string): Promise<Result<unknown>> {
+    return this.call(`workspaces/current/skills/${skillId}/references`);
+  }
+  importSkill(body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call("workspaces/current/skills/import", {
+      body: isFilePayload(body) ? toFormData(body) : body,
+    });
+  }
+  publishSkill(skillId: string, body: Record<string, unknown> = {}): Promise<Result<unknown>> {
+    return this.call(`workspaces/current/skills/${skillId}/publish`, { body });
+  }
+  deleteSkill(skillId: string, confirmationName?: string): Promise<Result<unknown>> {
+    return this.call(`workspaces/current/skills/${skillId}`, {
+      method: "DELETE",
+      body: confirmationName ? { confirmation_name: confirmationName } : {},
+    });
+  }
+  getAgentSkillBindings(agentId: string): Promise<Result<unknown>> {
+    return this.call(`workspaces/current/agents/${agentId}/skills`);
+  }
+  replaceAgentSkillBindings(agentId: string, skillIds: string[]): Promise<Result<unknown>> {
+    return this.call(`workspaces/current/agents/${agentId}/skills`, {
+      method: "PUT",
+      body: { skill_ids: skillIds },
+    });
+  }
 }
 
 function buildWorkflowToolPayload(

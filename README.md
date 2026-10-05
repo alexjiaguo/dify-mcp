@@ -4,14 +4,14 @@
 
 ### The most complete MCP server + CLI for [Dify](https://github.com/langgenius/dify)
 
-**174 tools. 19 namespaces. One registry.** Let any AI agent build, test, and ship
+**192 tools. 21 namespaces. One registry.** Let any AI agent build, test, and ship
 Dify workflows autonomously — everything a human can do in the UI, now scriptable.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/alexjiaguo/dify-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/alexjiaguo/dify-mcp/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/alexjiaguo/dify-mcp)](https://github.com/alexjiaguo/dify-mcp/releases/latest)
 [![Node >= 23.6](https://img.shields.io/badge/node-%E2%89%A523.6-green.svg)](https://nodejs.org)
-[![174 Tools](https://img.shields.io/badge/tools-174-purple.svg)](#tools)
+[![192 Tools](https://img.shields.io/badge/tools-192-purple.svg)](#tools)
 [![Live Verified](https://img.shields.io/badge/live--verified-authoring%20loop-brightgreen.svg)](#live-verified)
 
 Works with **24 popular AI agents** — Claude Code, Codex, Gemini CLI, Cursor, Cline, Windsurf, Roo Code, Continue, Zed, Aider, OpenCode, Antigravity, GitHub Copilot, Goose, Trae, Kilo Code, Warp, Crush, Droid, Amp, OpenHands, Cody, Augment, and Amazon Q Developer — plus any other MCP-compatible or shell-capable agent.
@@ -28,7 +28,7 @@ create workflows, wire up nodes, test them, iterate, and publish — without a b
 
 **dify-mcp** is the bridge. It exposes the **entire Dify console API** as a unified
 tool registry with **two surfaces**: a CLI any shell-capable agent can drive, and an
-MCP server (stdio or Streamable HTTP) any MCP-compatible host can attach. Same 174 tools, same JSON
+MCP server (stdio or Streamable HTTP) any MCP-compatible host can attach. Same 192 tools, same JSON
 contract, same safety guarantees.
 
 ```
@@ -36,7 +36,7 @@ contract, same safety guarantees.
 │                    dify-mcp                              │
 │                                                          │
 │   ┌──────────┐    ┌────────────────────┐    ┌─────────┐ │
-│   │  CLI     │───▶│   174-tool         │───▶│  Dify   │ │
+│   │  CLI     │───▶│   192-tool         │───▶│  Dify   │ │
 │   │  difywf  │    │   registry         │    │  API    │ │
 │   └──────────┘    │                    │    └─────────┘ │
 │   ┌──────────┐    │  app · workflow    │         ▲      │
@@ -113,6 +113,18 @@ Don't see your agent? If it supports MCP or can run shell commands, it works. Th
 - **Zero build step.** Runs directly on Node 23.6+ native TypeScript. No compiler,
   no bundler, no transpiler. Clone, install, go.
 
+## What's new in [v0.4.0](https://github.com/alexjiaguo/dify-mcp/releases/tag/v0.4.0)
+
+- **Workspace MCP tool providers (`mcp.*`).** Connect external MCP servers to your Dify workspace:
+  `mcp.list`, `mcp.get`, `mcp.create`, `mcp.update`, `mcp.delete` (confirm-gated), and `mcp.refresh_tools`.
+- **App MCP Server access points (`app.mcp_server_*`).** Expose any Dify workflow/agent app as an MCP server:
+  `app.mcp_server_get`, `app.mcp_server_set`, and `app.mcp_server_rotate` (confirm-gated token regeneration).
+- **Workspace Skills (`skill.*`).** Full skill lifecycle and agent skill bindings:
+  `skill.list`, `skill.get`, `skill.versions`, `skill.references`, `skill.import`, `skill.publish`,
+  `skill.delete` (confirm-gated), `skill.agent_bindings`, and `skill.set_agent_bindings`.
+- **Dify 1.17.1 compatibility & fixes.** Verified compatibility against Dify `1.17.1` upstream console routes;
+  fixed input validation ordering in `snippet.import`.
+
 ## What's new in [v0.3.0](https://github.com/alexjiaguo/dify-mcp/releases/tag/v0.3.0)
 
 - **Classic knowledge bases (`knowledge.*`).** Dataset CRUD, document create from
@@ -155,15 +167,16 @@ Authoring loop verified against **cloud.dify.ai 1.17.0** with console cookie aut
 - ✅ Create app → sync draft (echo graph) → run draft → delete (MCP Streamable HTTP)
 - ✅ MCP transport: `tools/call` over stdio and Streamable HTTP
 - ✅ Example templates in `examples/` validate clean (echo, LLM, RAG)
-- ✅ Unit tests · typecheck clean · MCP smoke (174 tools)
+- ✅ Unit tests · typecheck clean · MCP smoke (192 tools)
 
 ### Dify compatibility
 
 | dify-mcp | Dify | DSL | Graphon | Support |
 |---|---|---|---|---|
+| 0.4.x | 1.17.x | 0.7.0 | 0.7.0 | Supported; cloud 1.17.0 live-verified; 1.17.1 offline-verified |
 | 0.3.x | 1.17.x | 0.7.0 | 0.7.0 | Supported; cloud 1.17.0 live-verified |
 | 0.3.x | 1.16.x | 0.7.0 | 0.6.0 | Best-effort; not live-verified |
-| 0.3.x | <=1.15.x and 0.x | varies | varies | Unsupported; no legacy adapter |
+| <=0.3.x | <=1.15.x and 0.x | varies | varies | Unsupported; no legacy adapter |
 
 Cloud and self-hosted Dify releases can expose different console contracts even
 within a minor series. When reporting an issue, include the response header
@@ -171,7 +184,7 @@ within a minor series. When reporting an issue, include the response header
 exact command/tool call. DSL version drift is a hard failure
 (`DSL_VERSION_MISMATCH`), not something the agent should edit around.
 
-Not every one of the 174 tools is live-probed on every release. Coverage is densest on
+Not every one of the 192 tools is live-probed on every release. Coverage is densest on
 the authoring path (apps, workflow draft/run/publish, auth, MCP guardrails). Surfaces
 such as knowledge bases, RAG pipelines, snippets, agents, annotations, and audio are
 implemented against the console API contract and unit-tested; treat them as best-effort
@@ -266,7 +279,7 @@ when you need a dedicated backup service.
 
 ### Connect your agent (MCP)
 
-Same binary, same 174 tools. Copy-paste the config for your host:
+Same binary, same 192 tools. Copy-paste the config for your host:
 
 There is no single universal MCP filename. What every host needs is the same
 local stdio launch command: `difywf mcp serve`. The examples below show the
@@ -499,13 +512,15 @@ putting cookies or tokens in the image.
 
 ## Tools
 
-**174 tools across 19 namespaces.** Run `difywf --help` for the full live list, or
+**192 tools across 21 namespaces.** Run `difywf --help` for the full live list, or
 `difywf agent guide` for the agent-oriented playbook.
 
 | Namespace | Tools | What it does |
 |-----------|-------|-------------|
-| `app` | 19 | List, create, update, verified tags, delete, export, bulk backup, import/restore (console cookies or OpenAPI; `--yaml @file`), copy, rename, convert, chat, complete |
+| `app` | 22 | List, create, update, verified tags, delete, export, bulk backup, import/restore, MCP server access points, copy, rename, convert, chat, complete |
 | `workflow` | 29 | Get/sync drafts, validate (incl. iteration/loop sub-graphs), run, publish, workflow-as-tool providers, node last-run, variables, versions, HITL, features, triggers |
+| `mcp` | 6 | List, get, create, update, delete, refresh tools for workspace MCP tool providers |
+| `skill` | 9 | Workspace skills lifecycle: list, get, versions, references, import, publish, delete, agent skill bindings |
 | `provider` | 3 | List providers, list models, set credentials |
 | `plugin` | 4 | List, get, install, uninstall plugins |
 | `trigger` | 4 | Create, enable, list, webhook triggers; run triggers |
@@ -560,9 +575,9 @@ See [`.env.example`](.env.example). Common knobs:
 ## Develop
 
 ```bash
-npm test            # 118 unit tests
+npm test            # 122 unit tests
 npm run typecheck   # tsc --noEmit
-npm run smoke:mcp   # MCP stdio smoke (174 tools, JSON-RPC handshake)
+npm run smoke:mcp   # MCP stdio smoke (192 tools, JSON-RPC handshake)
 npm run smoke:mcp:http   # MCP Streamable HTTP smoke (stateless POST /mcp)
 ```
 
