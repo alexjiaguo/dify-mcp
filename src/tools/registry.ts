@@ -571,14 +571,14 @@ export const tools: Tool[] = [
   },
   {
     name: "workflow.sync_draft",
-    summary: "Validate and save the draft graph. Supports dry_run diff. Optimistic-concurrency via hash. Omitting env/conversation variables keeps the current draft values (does not wipe them).",
+    summary: "Validate and save the draft graph. Supports dry_run diff. Optimistic-concurrency via hash. Environment variables are never sent and are preserved server-side; manage them with workflow.list_env_vars / workflow.create_variable / workflow.update_variable / workflow.delete_variable. Omitting conversation_variables keeps the current draft values.",
     needs: "console",
     schema: {
       type: "object",
       properties: {
         app_id: S("app uuid"), graph: O("{nodes, edges}"), graph_json: S("graph as a JSON string"),
         features: O("app features"),
-        environment_variables: { type: "array" }, conversation_variables: { type: "array" },
+        conversation_variables: { type: "array" },
         hash: S("current draft hash; fetched automatically when omitted"),
         dry_run: B("validate + return diff without saving"),
         confirm: CONFIRM,
@@ -597,7 +597,7 @@ export const tools: Tool[] = [
       const current = await client.getDraft(req(args, "app_id"));
       if (dryRun) return dryRunBaseline(current, graph, issues);
       const fields = current.ok ? draftFields(current.data) : {};
-      // Cloud SyncDraftWorkflowPayload requires graph+features. Env/conversation
+      // Cloud SyncDraftWorkflowPayload requires graph+features. Conversation
       // variables are optional there and rejected as extra_forbidden when sent as
       // [] on an uninitialized draft — only include them when the caller or the
       // current draft actually has them.
@@ -605,10 +605,12 @@ export const tools: Tool[] = [
         graph,
         features: args.features ?? fields.features ?? {},
       };
-      const envVars = args.environment_variables ?? fields.environment_variables;
+      // Since Dify 1.17, SyncDraftWorkflowPayload forbids extra fields and has no
+      // top-level environment_variables (only environment_variable_patch), so
+      // sending them fails with extra_forbidden. The server preserves existing
+      // env vars on sync; they are managed via /environment-variables instead.
       const convVars = args.conversation_variables ?? fields.conversation_variables;
       const hash = str(args.hash) ?? fields.hash;
-      if (envVars !== undefined) body.environment_variables = envVars;
       if (convVars !== undefined) body.conversation_variables = convVars;
       if (hash !== undefined) body.hash = hash;
       return client.syncDraft(req(args, "app_id"), body);
