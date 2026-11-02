@@ -14,6 +14,7 @@ import { consoleLogin, parseAuthCookiesFromInput, refreshConsoleCookies, storeCo
 import { isPrivateUrl } from "../core/private-url.ts";
 import { redactArgs } from "../core/redact.ts";
 import { difywfHome } from "../core/paths.ts";
+import { isFilePayload } from "../core/multipart.ts";
 
 /** Optional MCP progress reporter (CLI leaves this undefined). */
 export type ProgressReporter = (update: {
@@ -221,9 +222,9 @@ async function listAllApps(ctx: ToolCtx): Promise<Result<AppRow[]>> {
   return ok(rows);
 }
 
-function backupFilename(app: AppRow): string {
+function backupFilename(app: AppRow, format: "yaml" | "ifpkg" = "yaml"): string {
   const safe = (value: string) => value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
-  return `${safe(app.name).slice(0, 80) || "app"}-${safe(app.id) || "app"}.yml`;
+  return `${safe(app.name).slice(0, 80) || "app"}-${safe(app.id) || "app"}.${format === "ifpkg" ? "ifpkg" : "yml"}`;
 }
 
 const S = (desc: string) => ({ type: "string", description: desc });
@@ -400,10 +401,16 @@ export const tools: Tool[] = [
   },
   {
     name: "app.export",
-    summary: "Export an app as DSL (YAML string). include_secret defaults to false and requires confirm=true.",
+    summary: "Export an app as YAML DSL or a Dify 1.18 .ifpkg package. include_secret requires confirm=true.",
     schema: {
       type: "object",
-      properties: { app_id: S("app uuid"), include_secret: B("include env-var secrets in the DSL"), confirm: CONFIRM },
+      properties: {
+        app_id: S("app uuid"),
+        format: { type: "string", enum: ["yaml", "ifpkg"], description: "default yaml for backward compatibility" },
+        workflow_id: S("optional published workflow id; console only"),
+        include_secret: B("include env-var secrets in the export"),
+        confirm: CONFIRM,
+      },
       required: ["app_id"],
     },
     run: async (args, ctx) => {
@@ -411,7 +418,14 @@ export const tools: Tool[] = [
       if (includeSecret && args.confirm !== true) {
         return err("CONFIRM_REQUIRED", "include_secret=true exports credentials; pass confirm=true to proceed");
       }
-      const result = await clientAny(ctx).exportDsl(req(args, "app_id"), includeSecret);
+      const format = str(args.format) ?? "yaml";
+      if (format !== "yaml" && format !== "ifpkg") return err("USAGE_ERROR", "format must be yaml or ifpkg");
+      const workflowId = str(args.workflow_id);
+      if (format === "ifpkg") {
+        const client = needClient(ctx, "console");
+        return (client as ConsoleClient).exportPackage(req(args, "app_id"), includeSecret, workflowId);
+      }
+      const result = await clientAny(ctx).exportDsl(req(args, "app_id"), includeSecret, workflowId);
       if (result.ok) assertDslVersion(result.data);
       return result;
     },
@@ -427,6 +441,7 @@ export const tools: Tool[] = [
         mode: S("optional app mode filter"),
         name: S("optional case-insensitive app name substring filter"),
         limit: { type: "number", description: "maximum apps to back up" },
+        format: { type: "string", enum: ["yaml", "ifpkg"], description: "default yaml" },
         include_secret: B("include env-var secrets; requires confirm=true"),
         overwrite: B("replace existing files; requires confirm=true"),
         confirm: CONFIRM,
@@ -471,7 +486,10 @@ export const tools: Tool[] = [
       }
       if (limit !== undefined) apps = apps.slice(0, limit);
 
-      const files = apps.map((app) => ({ app, file: backupFilename(app) }));
+      const format = str(args.format) ?? "yaml";
+      if (format !== "yaml" && format !== "ifpkg") return err("USAGE_ERROR", "format must be yaml or ifpkg");
+      if (format === "ifpkg") needClient(ctx, "console");
+      const files = apps.map((app) => ({ app, file: backupFilename(app, format) }));
       if (!overwrite) {
         const existing = files.filter(({ file }) => fs.existsSync(path.join(dir, file)));
         if (fs.existsSync(path.join(dir, "manifest.json"))) existing.push({ app: { id: "manifest", name: "manifest" }, file: "manifest.json" });
@@ -482,10 +500,15 @@ export const tools: Tool[] = [
 
       const manifestFiles: Array<Record<string, unknown>> = [];
       for (const { app, file } of files) {
-        const exported = await clientAny(ctx).exportDsl(app.id, includeSecret);
+        const exported = format === "ifpkg"
+          ? await (needClient(ctx, "console") as ConsoleClient).exportPackage(app.id, includeSecret)
+          : await clientAny(ctx).exportDsl(app.id, includeSecret);
         if (!exported.ok) return exported;
-        assertDslVersion(exported.data);
-        fs.writeFileSync(path.join(dir, file), exported.data, { mode: 0o600 });
+        if (format === "yaml") assertDslVersion(exported.data as string);
+        const content = format === "ifpkg"
+          ? Buffer.from((exported.data as { content_b64: string }).content_b64, "base64")
+          : exported.data as string;
+        fs.writeFileSync(path.join(dir, file), content, { mode: 0o600 });
         try {
           fs.chmodSync(path.join(dir, file), 0o600);
         } catch {
@@ -888,19 +911,50 @@ export const tools: Tool[] = [
   },
   {
     name: "app.import",
-    summary: "Import an app from DSL through console cookies or OpenAPI. Handles the 2-step confirm flow; requires confirm=true.",
+    summary: "Import YAML DSL or a Dify 1.18 .ifpkg package. Handles pending confirmation; requires confirm=true.",
     confirm: true,
-    schema: { type: "object", properties: { workspace_id: S("target workspace; required only for OpenAPI fallback"), yaml: S("DSL YAML content"), yaml_url: S("...or YAML URL"), name: S("override name"), description: S(""), confirm: CONFIRM }, required: ["confirm"] },
+    schema: {
+      type: "object",
+      properties: {
+        workspace_id: S("target workspace; required only for OpenAPI fallback"),
+        yaml: S("DSL YAML content"),
+        yaml_url: S("...or YAML URL"),
+        file: O("console-only .ifpkg package {name, content_b64, mime?}"),
+        app_id: S("optional app to overwrite; console only"),
+        draft_hash: S("optional overwrite concurrency guard; console only"),
+        name: S("override name"),
+        description: S(""),
+        confirm: CONFIRM,
+      },
+      required: ["confirm"],
+    },
     run: async (a, ctx) => {
       const body: Record<string, unknown> = {};
       const yaml = str(a.yaml);
-      if (yaml) {
+      const file = isFilePayload(a.file) ? a.file : null;
+      if (a.file !== undefined && !file) throw new ToolError("USAGE_ERROR", "file must be {name, content_b64, mime?}");
+      if ([yaml, str(a.yaml_url), file?.name].filter(Boolean).length !== 1) {
+        throw new ToolError("USAGE_ERROR", "pass exactly one of yaml, yaml_url, or file");
+      }
+      if (file && !file.name.toLowerCase().endsWith(".ifpkg")) {
+        throw new ToolError("USAGE_ERROR", "package filename must end in .ifpkg");
+      }
+      if (file && !ctx.console) throw new ToolError("AUTH_REQUIRED", "package import requires console authentication");
+      if (file) {
+        body.app_id = str(a.app_id);
+        body.draft_hash = str(a.draft_hash);
+        body.name = str(a.name);
+        body.description = str(a.description);
+      } else if (yaml) {
         assertDslVersion(yaml);
         body.mode = "yaml-content";
         body.yaml_content = yaml;
+        if (ctx.console) {
+          body.app_id = str(a.app_id);
+          body.draft_hash = str(a.draft_hash);
+        }
       }
       else if (str(a.yaml_url)) { body.mode = "yaml-url"; body.yaml_url = str(a.yaml_url); }
-      else throw new ToolError("USAGE_ERROR", "pass yaml (content) or yaml_url");
       assertPublicYamlUrl(str(a.yaml_url));
       if (str(a.name)) body.name = str(a.name);
       if (str(a.description)) body.description = str(a.description);
@@ -913,7 +967,11 @@ export const tools: Tool[] = [
       if (!consoleClient && !wid) {
         throw new ToolError("USAGE_ERROR", "workspace_id is required for OpenAPI app.import");
       }
-      const imp = consoleClient
+      const imp = file
+        ? await consoleClient!.importPackage(file, {
+            app_id: str(a.app_id), draft_hash: str(a.draft_hash), name: str(a.name), description: str(a.description),
+          })
+        : consoleClient
         ? await consoleClient.importDsl(body)
         : await openapiClient!.importDsl(wid!, body);
       if (!imp.ok) return imp;
@@ -956,11 +1014,11 @@ export const tools: Tool[] = [
       if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
         return err("USAGE_ERROR", `restore path is not a directory: ${dir}`);
       }
-      const yamlFiles = fs.readdirSync(dir, { withFileTypes: true })
-        .filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name))
+      const appFiles = fs.readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && (/\.ya?ml$/i.test(entry.name) || /\.ifpkg$/i.test(entry.name)))
         .map((entry) => entry.name)
         .sort();
-      if (!yamlFiles.length) return ok({ restore_path: dir, dry_run: dryRun, imported: [], skipped: [], failed: [] });
+      if (!appFiles.length) return ok({ restore_path: dir, dry_run: dryRun, imported: [], skipped: [], failed: [] });
 
       const manifestPath = path.join(dir, "manifest.json");
       const manifestFiles: Array<Record<string, unknown>> = [];
@@ -986,9 +1044,10 @@ export const tools: Tool[] = [
       const skipped: Array<Record<string, unknown>> = [];
       const failed: Array<Record<string, unknown>> = [];
 
-      for (const file of yamlFiles) {
-        const yaml = fs.readFileSync(path.join(dir, file), "utf8");
-        assertDslVersion(yaml);
+      for (const file of appFiles) {
+        const isPackage = file.toLowerCase().endsWith(".ifpkg");
+        const yaml = isPackage ? undefined : fs.readFileSync(path.join(dir, file), "utf8");
+        if (yaml) assertDslVersion(yaml);
         const meta = manifestFiles.find((item) => str(item.file) === file);
         const name = str(meta?.name);
         const conflict = !!name && existingNames.has(name.toLowerCase());
@@ -1004,7 +1063,13 @@ export const tools: Tool[] = [
         const importTool = tools.find((tool) => tool.name === "app.import")!;
         let result: Result<unknown>;
         try {
-          result = await importTool.run({ yaml, workspace_id: str(args.workspace_id), confirm: true }, ctx);
+          result = await importTool.run({
+            ...(isPackage
+              ? { file: { name: file, content_b64: fs.readFileSync(path.join(dir, file)).toString("base64"), mime: "application/zip" } }
+              : { yaml }),
+            name,
+            workspace_id: str(args.workspace_id), confirm: true,
+          }, ctx);
         } catch (e) {
           if (!(e instanceof ToolError)) throw e;
           failed.push({ file, name: name ?? null, error: { code: e.code, message: e.message, retryable: e.retryable } });
@@ -1020,7 +1085,7 @@ export const tools: Tool[] = [
 
       const summary = { restore_path: dir, dry_run: dryRun, manifest_found: manifestFound, imported, skipped, failed };
       if (failed.length) {
-        return err("SERVER_ERROR", `${failed.length} of ${yamlFiles.length} DSL import(s) failed`, {
+        return err("SERVER_ERROR", `${failed.length} of ${appFiles.length} app import(s) failed`, {
           details: summary,
         });
       }
@@ -1271,6 +1336,13 @@ export const tools: Tool[] = [
     needs: "console",
     schema: { type: "object", properties: { app_id: S("app uuid"), run_id: S("run id") }, required: ["app_id", "run_id"] },
     run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).exportRun(req(a, "app_id"), req(a, "run_id")),
+  },
+  {
+    name: "runs.node_children",
+    summary: "List nested child executions for a workflow tool node (Dify 1.18+).",
+    needs: "console",
+    schema: { type: "object", properties: { app_id: S("app uuid"), run_id: S("run id"), node_execution_id: S("node execution id") }, required: ["app_id", "run_id", "node_execution_id"] },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).runNodeChildren(req(a, "app_id"), req(a, "run_id"), req(a, "node_execution_id")),
   },
   {
     name: "stats.daily_conversations",

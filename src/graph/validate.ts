@@ -208,6 +208,24 @@ export function validateGraph(
         nodeId: n.id,
       });
     }
+    if (t === "agent" || t === "agent-v2") {
+      const routes = n.data.agent_output_routes;
+      if (routes && typeof routes === "object" && !Array.isArray(routes)) {
+        const config = routes as Record<string, unknown>;
+        const entries = Array.isArray(config.routes) ? config.routes : [];
+        if (config.enabled === true && entries.length < 2) {
+          issues.push({ level: "error", code: "INVALID_OUTPUT_ROUTES", message: `node '${n.id}' enabled output routes require at least two routes`, nodeId: n.id });
+        }
+        const ids = new Set<string>();
+        for (const route of entries) {
+          const id = route && typeof route === "object" ? (route as Record<string, unknown>).id : undefined;
+          if (typeof id !== "string" || !id.trim() || ["source", "target", "fail-branch"].includes(id) || ids.has(id)) {
+            issues.push({ level: "error", code: "INVALID_OUTPUT_ROUTES", message: `node '${n.id}' output route ids must be unique, nonblank, and not reserved`, nodeId: n.id });
+          }
+          if (typeof id === "string") ids.add(id);
+        }
+      }
+    }
   }
 
   // --- variable references ---

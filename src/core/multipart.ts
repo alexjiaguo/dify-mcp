@@ -18,3 +18,11 @@ export function toFormData(file: FilePayload, field = "file"): FormData {
   form.append(file.field || field, blob, file.name);
   return form;
 }
+
+export function appImportForm(file: FilePayload, fields: Record<string, string | undefined>): FormData {
+  const form = toFormData(file);
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) form.append(key, value);
+  }
+  return form;
+}

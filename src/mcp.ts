@@ -31,7 +31,7 @@ const mcpName = (n: string): string => n.replaceAll(".", "_");
 // a single instance for the process lifetime.
 function createMcpServer(): Server {
   const server = new Server(
-    { name: "difywf", version: "0.3.0" },
+    { name: "difywf", version: "0.5.0" },
     { capabilities: { tools: {}, resources: {} } },
   );
 

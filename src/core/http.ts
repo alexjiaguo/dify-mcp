@@ -1,6 +1,7 @@
 // Thin fetch wrapper mapping HTTP failures to the stable error contract.
 
 import { err, ok, type ErrCode, type Result } from "./contract.ts";
+import type { FilePayload } from "./multipart.ts";
 
 export type RequestOpts = {
   method?: string;
@@ -94,6 +95,46 @@ export async function apiCall<T = unknown>(
   const data = text ? safeJson(text) : null;
   if (!res.ok) return classifyHttpFailure(res.status, data, text) as Result<never>;
   return ok((opts.raw ? text : data) as T);
+}
+
+export async function downloadFile(
+  base: string,
+  path: string,
+  opts: RequestOpts = {},
+): Promise<Result<FilePayload>> {
+  const url = new URL(joinUrl(base, path));
+  for (const [k, v] of Object.entries(opts.query ?? {})) {
+    if (v !== undefined) url.searchParams.set(k, String(v));
+  }
+  const headers: Record<string, string> = { Accept: "application/zip, application/json" };
+  if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
+  applyCookies(headers, opts);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(timeoutMs(opts.timeoutMs, DEFAULT_HTTP_TIMEOUT_MS, "DIFYWF_HTTP_TIMEOUT_MS")),
+    });
+  } catch (e) {
+    return err("NETWORK_ERROR", `request failed: ${e instanceof Error ? e.message : String(e)}`, { retryable: true });
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    return classifyHttpFailure(res.status, text ? safeJson(text) : null, text);
+  }
+  const bytes = Buffer.from(await res.arrayBuffer());
+  return ok({
+    name: downloadName(res.headers.get("content-disposition")),
+    content_b64: bytes.toString("base64"),
+    mime: res.headers.get("content-type")?.split(";")[0] || "application/octet-stream",
+  });
+}
+
+function downloadName(disposition: string | null): string {
+  const encoded = disposition?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const plain = disposition?.match(/filename="([^"]+)"|filename=([^;]+)/i);
+  const name = encoded ?? plain?.[1] ?? plain?.[2] ?? "app.ifpkg";
+  try { return decodeURIComponent(name.trim()); } catch { return name.trim(); }
 }
 
 export async function readSse(

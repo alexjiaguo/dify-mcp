@@ -8,7 +8,7 @@ import { resolveConfig, maskToken } from "./core/config.ts";
 import { consoleLogin, deviceLoginFlow, parseAuthCookiesFromInput, storeCookies, storeToken } from "./core/auth.ts";
 import { runTool, tools } from "./tools/registry.ts";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 const NS_ALIASES: Record<string, string> = {
   wf: "workflow",
@@ -42,7 +42,7 @@ const POSITIONALS: Record<string, string[]> = {
   "workspace.invite_members": ["role"], "workspace.update_member_role": ["member_id", "role"], "workspace.remove_member": ["member_id"],
   "file.upload": ["app_id"],
   "workflow.hitl_preview": ["app_id", "node_id"], "workflow.hitl_submit": ["app_id", "node_id"],
-  "runs.list": ["app_id"], "runs.get": ["app_id", "run_id"], "runs.node_executions": ["app_id", "run_id"], "runs.export": ["app_id", "run_id"],
+  "runs.list": ["app_id"], "runs.get": ["app_id", "run_id"], "runs.node_executions": ["app_id", "run_id"], "runs.node_children": ["app_id", "run_id", "node_execution_id"], "runs.export": ["app_id", "run_id"],
   "stats.daily_conversations": ["app_id"], "stats.daily_terminals": ["app_id"], "stats.token_costs": ["app_id"], "stats.average_app_interactions": ["app_id"],
   "comment.list": ["app_id"], "comment.add": ["app_id"], "comment.resolve": ["app_id", "comment_id"],
   "annotation.list": ["app_id"], "annotation.add": ["app_id"], "annotation.delete": ["app_id", "annotation_id"],

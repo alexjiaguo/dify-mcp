@@ -2,9 +2,9 @@
 // app create/update/delete, draft sync, node defaults, publish, node runs,
 // providers/plugins. Hand-typed; version adaptation lives here.
 
-import { apiCall, readSse, type RequestOpts } from "../core/http.ts";
+import { apiCall, downloadFile, readSse, type RequestOpts } from "../core/http.ts";
 import { ok, err, type Result } from "../core/contract.ts";
-import { isFilePayload, toFormData } from "../core/multipart.ts";
+import { appImportForm, isFilePayload, toFormData, type FilePayload } from "../core/multipart.ts";
 
 export class ConsoleClient {
   base: string;
@@ -72,14 +72,23 @@ export class ConsoleClient {
   getApp(appId: string): Promise<Result<unknown>> {
     return this.call(`apps/${appId}`);
   }
-  async exportDsl(appId: string, includeSecret = false): Promise<Result<string>> {
+  async exportDsl(appId: string, includeSecret = false, workflowId?: string): Promise<Result<string>> {
     const r = await this.call<{ data: string }>(`apps/${appId}/export`, {
-      query: { include_secret: includeSecret ? "true" : "false" },
+      query: { format: "yaml", include_secret: includeSecret ? "true" : "false", workflow_id: workflowId },
     });
     return r.ok ? ok(r.data.data) : r;
   }
+  exportPackage(appId: string, includeSecret = false, workflowId?: string): Promise<Result<FilePayload>> {
+    return downloadFile(`${this.base}/console/api`, `apps/${appId}/export`, {
+      query: { format: "ifpkg", include_secret: includeSecret ? "true" : "false", workflow_id: workflowId },
+      ...this.authOpts({}),
+    });
+  }
   importDsl(payload: Record<string, unknown>): Promise<Result<unknown>> {
     return this.call("apps/imports", { body: payload });
+  }
+  importPackage(file: FilePayload, fields: Record<string, string | undefined>): Promise<Result<unknown>> {
+    return this.call("apps/imports", { body: appImportForm(file, fields) });
   }
   confirmImport(importId: string): Promise<Result<unknown>> {
     return this.call(`apps/imports/${importId}/confirm`, { body: {} });
@@ -486,6 +495,9 @@ export class ConsoleClient {
   }
   runNodeExecutions(appId: string, runId: string): Promise<Result<unknown>> {
     return this.call(`apps/${appId}/workflow-runs/${runId}/node-executions`);
+  }
+  runNodeChildren(appId: string, runId: string, nodeExecutionId: string): Promise<Result<unknown>> {
+    return this.call(`apps/${appId}/workflow-runs/${runId}/node-executions/${nodeExecutionId}/children`);
   }
   exportRun(appId: string, runId: string): Promise<Result<unknown>> {
     return this.call(`apps/${appId}/workflow-runs/${runId}/export`);

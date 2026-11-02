@@ -38,7 +38,7 @@ export class OpenapiClient {
     return readSse(`${this.base}/openapi/v1`, `apps/${appId}/tasks/${taskId}/events`, { token: this.token });
   }
 
-  exportDsl(appId: string, includeSecret = false): Promise<Result<string>> {
+  exportDsl(appId: string, includeSecret = false, _workflowId?: string): Promise<Result<string>> {
     return this.call<string>(`apps/${appId}/dsl`, {
       raw: true,
       query: { include_secret: includeSecret ? "true" : "false" },
