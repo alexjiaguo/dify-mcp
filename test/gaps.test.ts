@@ -72,7 +72,7 @@ test("resolveConfig reads DIFY_CONSOLE_COOKIE when DIFYWF_HOME is set", async ()
   });
 });
 
-test("workflow.sync_draft preserves env vars when omitted", async () => {
+test("workflow.sync_draft never sends env vars (Dify 1.17+ forbids them) and preserves the rest", async () => {
   let captured: Record<string, unknown> = {};
   const fake = {
     getDraft: async (): Promise<Result<unknown>> => ({
@@ -95,7 +95,7 @@ test("workflow.sync_draft preserves env vars when omitted", async () => {
     fakeCtx({ console: fake as never }),
   );
   assert.ok(r.ok);
-  assert.deepEqual(captured.environment_variables, [{ name: "SECRET", value: "x" }]);
+  assert.equal("environment_variables" in captured, false);
   assert.deepEqual(captured.conversation_variables, [{ name: "c", value: "y" }]);
   assert.deepEqual(captured.features, { file_upload: true });
   assert.equal(captured.hash, "h1");

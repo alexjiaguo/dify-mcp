@@ -45,9 +45,12 @@ x-difywf-token). /health stays unauthenticated for probes.`,
 7. workflow.publish with confirm=true — requires a model provider to be
    configured first (provider.list / provider.set_credentials).
 If sync_draft fails with a stale-hash error: refetch workflow.get_draft and
-retry with the fresh hash (VALIDATION_FAILED, retryable=true). Omitting
-environment_variables / conversation_variables keeps the current draft
-values — it does not wipe secrets.`,
+retry with the fresh hash (VALIDATION_FAILED, retryable=true). sync_draft
+never sends environment variables (Dify 1.17+ rejects them there) and the
+server keeps the current ones — it does not wipe secrets. Manage env vars
+with workflow.list_env_vars / workflow.create_variable /
+workflow.update_variable / workflow.delete_variable. Omitting
+conversation_variables keeps the current draft values.`,
 
   compatibility: `# Compatibility contract
 dify-mcp 0.5.x:
