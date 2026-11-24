@@ -919,6 +919,44 @@ export class ConsoleClient {
       body: { skill_ids: skillIds },
     });
   }
+
+  // --- personal access tokens (Dify 1.20+) ---
+  listPersonalAccessTokens(q?: { page?: number; limit?: number }): Promise<Result<unknown>> {
+    return this.call("account/personal-access-tokens", { query: q });
+  }
+  getPersonalAccessToken(tokenId: string): Promise<Result<unknown>> {
+    return this.call(`account/personal-access-tokens/${tokenId}`);
+  }
+  createPersonalAccessToken(
+    body: Record<string, unknown>,
+    idempotencyKey?: string,
+  ): Promise<Result<unknown>> {
+    return this.call("account/personal-access-tokens", {
+      body,
+      headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+    });
+  }
+  updatePersonalAccessToken(tokenId: string, body: Record<string, unknown>): Promise<Result<unknown>> {
+    return this.call(`account/personal-access-tokens/${tokenId}`, { method: "PATCH", body });
+  }
+  revokePersonalAccessToken(tokenId: string): Promise<Result<unknown>> {
+    return this.call(`account/personal-access-tokens/${tokenId}`, { method: "DELETE" });
+  }
+  listPatResourceCandidates(q?: {
+    cursor?: number;
+    limit?: number;
+    keyword?: string;
+    resource_type?: string;
+  }): Promise<Result<unknown>> {
+    return this.call("account/personal-access-token-resources", { query: q });
+  }
+  listPatWorkspaceCandidates(q?: {
+    cursor?: number;
+    limit?: number;
+    keyword?: string;
+  }): Promise<Result<unknown>> {
+    return this.call("account/personal-access-token-workspaces", { query: q });
+  }
 }
 
 function buildWorkflowToolPayload(

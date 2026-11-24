@@ -155,7 +155,10 @@ export function resolveConfig(flags: Flags): Config {
   return {
     baseUrl: baseUrl.replace(/\/+$/, ""),
     openapiToken:
-      str(flags["openapi-token"]) ?? process.env.DIFY_OPENAPI_TOKEN ?? entry.openapi_token,
+      str(flags["openapi-token"]) ??
+      process.env.DIFY_OPENAPI_TOKEN ??
+      process.env.DIFY_TOKEN ??
+      entry.openapi_token,
     consoleToken:
       str(flags["console-token"]) ?? process.env.DIFY_CONSOLE_TOKEN ?? entry.console_token,
     consoleCookies:

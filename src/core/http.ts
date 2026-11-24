@@ -6,6 +6,7 @@ import type { FilePayload } from "./multipart.ts";
 export type RequestOpts = {
   method?: string;
   token?: string;
+  headers?: Record<string, string>;
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined>;
   raw?: boolean; // return response text instead of parsed JSON
@@ -73,7 +74,7 @@ export async function apiCall<T = unknown>(
     if (v !== undefined) url.searchParams.set(k, String(v));
   }
   const encoded = encodeBody(opts.body);
-  const headers: Record<string, string> = { Accept: "application/json", ...encoded.extra };
+  const headers: Record<string, string> = { Accept: "application/json", ...encoded.extra, ...opts.headers };
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   applyCookies(headers, opts);
 
@@ -253,7 +254,7 @@ export async function fetchCapturingCookies(
     if (v !== undefined) url.searchParams.set(k, String(v));
   }
   const encoded = encodeBody(opts.body);
-  const headers: Record<string, string> = { Accept: "application/json", ...encoded.extra };
+  const headers: Record<string, string> = { Accept: "application/json", ...encoded.extra, ...opts.headers };
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   applyCookies(headers, opts);
   let res: Response;

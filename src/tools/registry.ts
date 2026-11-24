@@ -302,11 +302,11 @@ export const tools: Tool[] = [
   },
   {
     name: "auth.set_tokens",
-    summary: "Store an OpenAPI and/or console bearer token for this base URL.",
+    summary: "Store an OpenAPI (device token or Dify 1.20+ PAT) and/or console bearer token for this base URL.",
     schema: {
       type: "object",
       properties: {
-        openapi_token: S("OpenAPI device/management token"),
+        openapi_token: S("OpenAPI device token or Dify 1.20+ PAT (dpat_...)"),
         console_token: S("console bearer token (legacy)"),
         base_url: S("Dify base URL if not already configured"),
       },
@@ -577,7 +577,7 @@ export const tools: Tool[] = [
   },
   {
     name: "workflow.sync_draft",
-    summary: "Validate and save the draft graph. Supports dry_run diff. Optimistic-concurrency via hash. Existing env/conversation variables are preserved across Dify 1.16-1.19; manage env vars with the dedicated workflow variable tools.",
+    summary: "Validate and save the draft graph. Supports dry_run diff. Optimistic-concurrency via hash. Existing env/conversation variables are preserved across Dify 1.16-1.20; manage env vars with the dedicated workflow variable tools.",
     needs: "console",
     schema: {
       type: "object",
@@ -2618,6 +2618,140 @@ export const tools: Tool[] = [
       const ids = Array.isArray(a.skill_ids) ? (a.skill_ids as unknown[]).map(String).filter(Boolean) : [];
       return c.replaceAgentSkillBindings(req(a, "agent_id"), ids);
     },
+  },
+
+  // --- personal access tokens (Dify 1.20+) ---
+  {
+    name: "pat.list",
+    summary: "List Personal Access Tokens for the current console account (Dify 1.20+).",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: { page: { type: "number" }, limit: { type: "number" } },
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).listPersonalAccessTokens({
+        page: num(a.page),
+        limit: num(a.limit),
+      }),
+  },
+  {
+    name: "pat.get",
+    summary: "Get details and saved scopes of a Personal Access Token (Dify 1.20+).",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: { token_id: S("PAT uuid") },
+      required: ["token_id"],
+    },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).getPersonalAccessToken(req(a, "token_id")),
+  },
+  {
+    name: "pat.create",
+    summary: "Create a Personal Access Token (Dify 1.20+). Returns the one-time dpat_ secret; confirm=true required.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: {
+        name: S("token display name (1-255 chars)"),
+        expiration: { type: "string", enum: ["30_days", "90_days", "180_days", "365_days", "never"], description: "default 90_days" },
+        resource_scope: O("{ mode: 'all'|'selected'|'none', resources?: [{ resource_type, resource_id }] }"),
+        workspace_scope: O("{ mode: 'all'|'selected'|'none', workspace_ids?: [uuid] }"),
+        idempotency_key: S("optional Idempotency-Key header for safe retries"),
+        confirm: CONFIRM,
+      },
+      required: ["name", "confirm"],
+    },
+    run: async (a, ctx) => {
+      const body = pick(a, ["name", "expiration", "resource_scope", "workspace_scope"]);
+      return (needClient(ctx, "console") as ConsoleClient).createPersonalAccessToken(body, str(a.idempotency_key));
+    },
+  },
+  {
+    name: "pat.update",
+    summary: "Update a Personal Access Token name and/or scopes (Dify 1.20+). Requires current version for optimistic locking.",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        token_id: S("PAT uuid"),
+        name: S("token display name (1-255 chars)"),
+        version: { type: "number", description: "current PAT version (>=1)" },
+        resource_scope: O("supply together with workspace_scope, or omit both to preserve scopes"),
+        workspace_scope: O("supply together with resource_scope, or omit both to preserve scopes"),
+      },
+      required: ["token_id", "name", "version"],
+    },
+    run: async (a, ctx) => {
+      const hasRes = a.resource_scope !== undefined;
+      const hasWs = a.workspace_scope !== undefined;
+      if (hasRes !== hasWs) {
+        throw new ToolError("USAGE_ERROR", "supply both resource_scope and workspace_scope, or omit both to preserve scopes");
+      }
+      const version = num(a.version);
+      if (version === undefined || !Number.isInteger(version) || version < 1) {
+        throw new ToolError("USAGE_ERROR", "version must be an integer >= 1");
+      }
+      const body: Record<string, unknown> = { name: req(a, "name"), version };
+      if (hasRes && hasWs) {
+        body.resource_scope = obj(a, "resource_scope");
+        body.workspace_scope = obj(a, "workspace_scope");
+      }
+      return (needClient(ctx, "console") as ConsoleClient).updatePersonalAccessToken(req(a, "token_id"), body);
+    },
+  },
+  {
+    name: "pat.revoke",
+    summary: "Revoke a Personal Access Token immediately (Dify 1.20+). confirm=true required.",
+    needs: "console",
+    confirm: true,
+    schema: {
+      type: "object",
+      properties: { token_id: S("PAT uuid"), confirm: CONFIRM },
+      required: ["token_id", "confirm"],
+    },
+    run: async (a, ctx) => (needClient(ctx, "console") as ConsoleClient).revokePersonalAccessToken(req(a, "token_id")),
+  },
+  {
+    name: "pat.resources",
+    summary: "List account-visible app/dataset candidates for PAT resource scoping (Dify 1.20+).",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        cursor: { type: "number" },
+        limit: { type: "number" },
+        keyword: S("search keyword"),
+        resource_type: { type: "string", enum: ["app", "dataset"] },
+      },
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).listPatResourceCandidates({
+        cursor: num(a.cursor),
+        limit: num(a.limit),
+        keyword: str(a.keyword),
+        resource_type: str(a.resource_type),
+      }),
+  },
+  {
+    name: "pat.workspaces",
+    summary: "List account-visible workspace candidates for PAT workspace scoping (Dify 1.20+).",
+    needs: "console",
+    schema: {
+      type: "object",
+      properties: {
+        cursor: { type: "number" },
+        limit: { type: "number" },
+        keyword: S("search keyword"),
+      },
+    },
+    run: async (a, ctx) =>
+      (needClient(ctx, "console") as ConsoleClient).listPatWorkspaceCandidates({
+        cursor: num(a.cursor),
+        limit: num(a.limit),
+        keyword: str(a.keyword),
+      }),
   },
 ];
 

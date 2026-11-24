@@ -1,4 +1,4 @@
-// Client for the official external surface /openapi/v1 (device-token auth).
+// Client for the official external surface /openapi/v1 (OAuth device token or Dify 1.20+ PAT auth).
 // Stable + typed surface: apps list/describe, run/stop, task events, DSL,
 // workspaces. See PRD section 7.3.
 

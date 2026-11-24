@@ -8,7 +8,7 @@ import { resolveConfig, maskToken } from "./core/config.ts";
 import { consoleLogin, deviceLoginFlow, parseAuthCookiesFromInput, storeCookies, storeToken } from "./core/auth.ts";
 import { runTool, tools } from "./tools/registry.ts";
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 
 const NS_ALIASES: Record<string, string> = {
   wf: "workflow",
@@ -385,7 +385,7 @@ function printHelp(positional: string[]): void {
     "  --output-file <path>          write the full result to a file; stdout returns a small acknowledgement",
     "  --base-url <url>              Dify base URL (or DIFY_API_BASE)",
     "  --workspace <id>              workspace id (or DIFY_WORKSPACE_ID)",
-    "  --openapi-token / --console-token   tokens (or DIFY_OPENAPI_TOKEN / DIFY_CONSOLE_TOKEN)",
+    "  --openapi-token / --console-token   tokens (or DIFY_OPENAPI_TOKEN / DIFY_TOKEN / DIFY_CONSOLE_TOKEN; accepts dpat_ PAT)",
     "  --console-cookie <header|json>     console session cookies (or DIFY_CONSOLE_COOKIE)",
     "  --email / --password            console login (or DIFY_CONSOLE_EMAIL / DIFY_CONSOLE_PASSWORD)",
     "  --password-encoding <plain|base64>  login payload encoding (or DIFY_CONSOLE_PASSWORD_ENCODING)",

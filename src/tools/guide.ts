@@ -11,7 +11,7 @@ become underscores: \`workflow.sync_draft\` -> \`workflow_sync_draft\`). Both
 return the same contract: { "ok": bool, "data": ..., "error": { "code",
 "message", "retryable" } }. Parse this JSON; never scrape human text.
 
-Targets: dify-mcp 0.6.x supports Dify 1.19.x and 1.18.x (contract-verified) and
+Targets: dify-mcp 0.7.x supports Dify 1.20.x, 1.19.x, and 1.18.x (contract-verified) and
 1.17.x (cloud 1.17.0 live-verified; 1.17.1 offline-verified), plus best-effort
 1.16.x. DSL version 0.7.0. Graphon is server-side: 0.8.0 on 1.18+,
 0.7.0 on 1.17.x, 0.6.0 on 1.16.x. Dify <=1.15.x and 0.x are unsupported.
@@ -24,8 +24,13 @@ MCP tools: \`auth.import_cookies\`, \`auth.login_console\`, \`auth.set_tokens\`,
 \`difywf auth login-console\`, or \`difywf auth token --console-cookie\`.
 You can also set DIFY_CONSOLE_COOKIE (Cookie header or JSON) or
 --console-cookie. Sessions auto-refresh via the refresh_token cookie.
-OpenAPI (/openapi/v1) is optional fallback for list/run/export when a
-device token is present (\`difywf auth login\` or DIFY_OPENAPI_TOKEN).
+OpenAPI (/openapi/v1, enabled by default on Dify 1.20+) accepts either a
+Personal Access Token (PAT, \`dpat_...\`, managed via \`pat.*\`) or an OAuth
+device token (\`difywf auth login\`) via DIFY_OPENAPI_TOKEN, DIFY_TOKEN,
+--openapi-token, or \`auth.set_tokens\`.
+PAT scope boundary: PATs cover OpenAPI resource calls/discovery (apps,
+:run, :stop, /events, /files, HITL forms, workspaces); authoring, DSL
+import/export, and workspace switching still require console cookies.
 Base URL: --base-url, DIFY_API_BASE, or the active host in ~/.difywf/hosts.json
 (or $DIFYWF_HOME). Check with \`auth.status\`.
 HTTP MCP: stdio is trusted; Streamable HTTP binds 127.0.0.1 by default.
@@ -46,16 +51,17 @@ x-difywf-token). /health stays unauthenticated for probes.`,
    configured first (provider.list / provider.set_credentials).
 If sync_draft fails with a stale-hash error: refetch workflow.get_draft and
 retry with the fresh hash (VALIDATION_FAILED, retryable=true). Existing
-environment/conversation variables are preserved on 1.16-1.19. On 1.17+ the
+environment/conversation variables are preserved on 1.16-1.20. On 1.17+ the
 client retries without the legacy environment_variables field only after the
 server rejects it as extra_forbidden. Manage env vars with the dedicated
 workflow variable tools.`,
 
   compatibility: `# Compatibility contract
-dify-mcp 0.6.x:
+dify-mcp 0.7.x:
 
 | Dify | DSL | Graphon | Support |
 |---|---|---|---|
+| 1.20.x | 0.7.0 | 0.8.0 | Supported; 1.20.0 contract-verified |
 | 1.19.x | 0.7.0 | 0.8.0 | Supported; 1.19.0 contract-verified |
 | 1.18.x | 0.7.0 | 0.8.0 | Supported; 1.18.0 contract-verified |
 | 1.17.x | 0.7.0 | 0.7.0 | Supported; cloud 1.17.0 live-verified; 1.17.1 offline-verified |
