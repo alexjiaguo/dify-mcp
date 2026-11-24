@@ -555,6 +555,14 @@ putting cookies or tokens in the image.
 
 > No `difywf` on PATH? Use the absolute path: `node /path/to/dify-mcp/bin/difywf.js mcp serve`.
 
+### Install the Agent Skill
+
+For CLI-first agents or automatic workflow triggering without keeping MCP enabled globally, install the bundled skill ([`skills/difywf/SKILL.md`](skills/difywf/SKILL.md)):
+
+```bash
+npx skills add alexjiaguo/dify-mcp
+```
+
 ## Tools
 
 **200 tools across 22 namespaces.** Run `difywf --help` for the full live list, or
